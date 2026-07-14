@@ -118,6 +118,20 @@ If you'd rather do it by hand, the target launch string is
 `WINEDLLOVERRIDES="dsound=n,b" %command%` — right-click BO3 in Steam →
 *Properties* → *Launch options*.
 
+**Non-Steam BO3 (Lutris / Heroic / manual install / DRM-free copy):**
+
+- The app auto-detects installs under `~/Games/Call of Duty Black Ops III`,
+  Lutris/Heroic/Bottles prefixes, or you can point it at any folder via
+  Preferences → *BO3 install path*.
+- If you added BO3 to Steam via *Add a Non-Steam Game* and want the Steam
+  launch options set for that shortcut too, open Preferences →
+  *Steam launch options* and click **Detect** — the app scans your Steam
+  shortcuts and fills in the correct per-user AppID for you.
+- If you don't use Steam at all, the launch-options auto-set doesn't apply
+  — you set `WINEDLLOVERRIDES` in your Lutris/Heroic/Bottles launcher
+  wrapper instead. The rest of the app (install/toggle patch, edit
+  `t7patch.conf`) still works.
+
 The toggle at the top disables the patch (renames the DLLs to `*.disabled`)
 whenever you want vanilla BO3 for a session, without deleting anything.
 
@@ -273,6 +287,21 @@ pipx install --system-site-packages .
 Wer es lieber selbst macht: der Zielstring ist
 `WINEDLLOVERRIDES="dsound=n,b" %command%` — Rechtsklick auf BO3 in Steam →
 *Eigenschaften* → *Startoptionen*.
+
+**Non-Steam BO3 (Lutris / Heroic / manuelle Installation / DRM-freie Kopie):**
+
+- Die App findet Installationen unter `~/Games/Call of Duty Black Ops III`,
+  in Lutris/Heroic/Bottles-Prefixes automatisch — oder du zeigst ihr den
+  Ordner über *Preferences → BO3 install path*.
+- Wenn du BO3 über *Nicht-Steam-Spiel hinzufügen* in Steam eingetragen
+  hast und die Steam-Launch-Options auch für diese Verknüpfung setzen
+  willst: *Preferences → Steam launch options* → **Detect** klicken. Die App
+  scannt deine Steam-Shortcuts und trägt die richtige benutzerspezifische
+  AppID für dich ein.
+- Ohne Steam überhaupt: das automatische Setzen der Launch-Options greift
+  nicht — `WINEDLLOVERRIDES` muss dann im Lutris-/Heroic-/Bottles-Wrapper
+  gesetzt werden. Der Rest der App (Patch installieren/deaktivieren,
+  `t7patch.conf` bearbeiten) funktioniert trotzdem.
 
 Der Schalter oben deaktiviert den Patch (benennt die DLLs zu `*.disabled` um)
 wenn du mal Vanilla-BO3 haben willst — ohne etwas zu löschen.

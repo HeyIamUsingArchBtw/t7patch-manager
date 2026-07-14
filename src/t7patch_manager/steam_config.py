@@ -291,14 +291,17 @@ class LaunchOptionsStatus:
     matches_target: bool      # current == BO3_LAUNCH_OPTIONS
 
 
-def check_status(target: str = BO3_LAUNCH_OPTIONS) -> LaunchOptionsStatus:
+def check_status(
+    target: str = BO3_LAUNCH_OPTIONS,
+    appid: str = BO3_APPID,
+) -> LaunchOptionsStatus:
     """Return the status of the most-recently-used Steam profile."""
     configs = find_local_configs()
     if not configs:
         return LaunchOptionsStatus(config=None, current=None, matches_target=False)
     cfg = configs[0]
     try:
-        current = get_launch_options(cfg)
+        current = get_launch_options(cfg, appid=appid)
     except Exception as exc:  # noqa: BLE001
         log.warning("Could not read %s: %s", cfg.path, exc)
         current = None
@@ -307,3 +310,106 @@ def check_status(target: str = BO3_LAUNCH_OPTIONS) -> LaunchOptionsStatus:
         current=current,
         matches_target=(current or "").strip() == target.strip(),
     )
+
+
+# ── Non-Steam shortcut discovery ──
+@dataclass(frozen=True)
+class NonSteamShortcut:
+    """A game the user added to Steam via 'Add a Non-Steam Game'."""
+    appid: str          # decimal string of the Steam-generated shortcut AppID
+    name: str           # display name Steam shows in the library
+    exe: str            # exe / launcher path Steam records
+    userdata: Path      # userdata/<uid> dir this shortcut lives under
+
+
+_BO3_NAME_HINTS = ("black ops iii", "black ops 3", "bo3", "blackops3")
+
+
+def _read_shortcuts_vdf(path: Path) -> list[dict]:
+    """Parse Steam's binary shortcuts.vdf into a list of shortcut dicts.
+
+    shortcuts.vdf is a *binary* KeyValues blob, not the text format used by
+    localconfig.vdf. Its structure is a sequence of null-terminated typed
+    fields wrapped in ``\\x00shortcuts\\x00`` → ``\\x00<idx>\\x00`` → field
+    entries. We do a permissive text-oriented extraction — enough to pull
+    out ``appid``, ``AppName`` and ``Exe`` for every entry, which is all we
+    need. We deliberately don't ship a full binary VDF parser; if this
+    fingerprinting misses an edge case, the user's manual AppID override
+    still works.
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return []
+
+    out: list[dict] = []
+    # Split on the record separator Steam uses between shortcuts (0x00<index>0x00).
+    # We just scan every '\x02appid' + 4-byte little-endian uint block, then
+    # look at the next AppName / Exe string fields that follow.
+    i = 0
+    while True:
+        j = raw.find(b"\x02appid\x00", i)
+        if j == -1:
+            break
+        # After the key, Steam writes the uint32 little-endian.
+        val_off = j + len(b"\x02appid\x00")
+        if val_off + 4 > len(raw):
+            break
+        appid_uint = int.from_bytes(raw[val_off:val_off + 4], "little", signed=True)
+        # Steam stores it as *signed* i32; the 32-bit AppID we want in
+        # localconfig.vdf is that value reinterpreted as unsigned.
+        appid = str(appid_uint & 0xFFFFFFFF)
+
+        # Look ahead a few hundred bytes for AppName + Exe strings.
+        window = raw[val_off:val_off + 4096]
+
+        def _read_string(key: bytes) -> str:
+            k = window.find(b"\x01" + key + b"\x00")
+            if k == -1:
+                return ""
+            start = k + len(key) + 2
+            end = window.find(b"\x00", start)
+            if end == -1:
+                return ""
+            try:
+                return window[start:end].decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                return ""
+
+        out.append({
+            "appid": appid,
+            "AppName": _read_string(b"AppName") or _read_string(b"appname"),
+            "Exe":     _read_string(b"Exe")     or _read_string(b"exe"),
+        })
+        i = val_off + 4
+    return out
+
+
+def find_non_steam_bo3_shortcuts() -> list[NonSteamShortcut]:
+    """Scan every Steam userdata dir for shortcuts that look like BO3.
+
+    Matches on AppName + Exe path against a small set of BO3 name hints, so
+    a user who named their shortcut ``Black Ops 3 (T5)`` or ``BO3-crack`` or
+    ``blackops3.exe`` all get picked up.
+    """
+    hits: list[NonSteamShortcut] = []
+    for root in _existing_steam_roots():
+        userdata = root / "userdata"
+        if not userdata.is_dir():
+            continue
+        for uid_dir in userdata.iterdir():
+            if not uid_dir.is_dir() or not uid_dir.name.isdigit():
+                continue
+            sc = uid_dir / "config" / "shortcuts.vdf"
+            if not sc.is_file():
+                continue
+            for entry in _read_shortcuts_vdf(sc):
+                needle = f"{entry.get('AppName', '')} {entry.get('Exe', '')}".lower()
+                if any(h in needle for h in _BO3_NAME_HINTS):
+                    hits.append(NonSteamShortcut(
+                        appid=entry["appid"],
+                        name=entry.get("AppName", "") or "(unnamed)",
+                        exe=entry.get("Exe", ""),
+                        userdata=uid_dir,
+                    ))
+    return hits

@@ -261,25 +261,47 @@ class PreferencesDialog(Adw.PreferencesDialog):
 
         # ── Steam launch options override ──
         g_launch = Adw.PreferencesGroup(
-            title="Steam launch options override",
+            title="Steam launch options",
             description=(
-                "Leave empty to use the default "
-                '\'WINEDLLOVERRIDES="dsound=n,b" %command%\'. '
-                "Override only if you know what you're doing."
+                "For 99% of users the defaults are correct. Only touch these "
+                "if you added BO3 as a Non-Steam game or want a custom "
+                "launch string."
             ),
         )
         page.add(g_launch)
 
-        self._launchopts_pref_row = Adw.EntryRow(title="Custom launch options")
+        self._launchopts_pref_row = Adw.EntryRow(
+            title='Launch string (default: WINEDLLOVERRIDES="dsound=n,b" %command%)',
+        )
         if settings.launch_options_override:
             self._launchopts_pref_row.set_text(settings.launch_options_override)
         clear_lo = Gtk.Button(
-            icon_name="edit-clear-symbolic", tooltip_text="Clear",
+            icon_name="edit-clear-symbolic", tooltip_text="Reset to default",
             valign=Gtk.Align.CENTER, css_classes=["flat"],
         )
         clear_lo.connect("clicked", lambda *_: self._launchopts_pref_row.set_text(""))
         self._launchopts_pref_row.add_suffix(clear_lo)
         g_launch.add(self._launchopts_pref_row)
+
+        self._appid_pref_row = Adw.EntryRow(
+            title="Steam AppID (default: 311210 = retail BO3)",
+        )
+        if settings.launch_options_appid_override:
+            self._appid_pref_row.set_text(settings.launch_options_appid_override)
+        detect_appid = Gtk.Button(
+            label="Detect",
+            tooltip_text="Scan Steam shortcuts for a BO3-looking Non-Steam game",
+            valign=Gtk.Align.CENTER, css_classes=["flat"],
+        )
+        detect_appid.connect("clicked", self._detect_non_steam_appid)
+        clear_appid = Gtk.Button(
+            icon_name="edit-clear-symbolic", tooltip_text="Reset to default",
+            valign=Gtk.Align.CENTER, css_classes=["flat"],
+        )
+        clear_appid.connect("clicked", lambda *_: self._appid_pref_row.set_text(""))
+        self._appid_pref_row.add_suffix(detect_appid)
+        self._appid_pref_row.add_suffix(clear_appid)
+        g_launch.add(self._appid_pref_row)
 
         # ── Advanced (network) ──
         g3 = Adw.PreferencesGroup(
@@ -351,6 +373,10 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self._s.bo3_dir_override = self._bo3_row.get_text().strip() or None
         self._s.patch_source_override = self._src_row.get_text().strip() or None
         self._s.launch_options_override = self._launchopts_pref_row.get_text().strip() or None
+        appid_raw = self._appid_pref_row.get_text().strip()
+        # Only accept digit-only AppIDs — anything else is user error and we
+        # ignore it rather than silently writing garbage to Steam's config.
+        self._s.launch_options_appid_override = appid_raw if appid_raw.isdigit() else None
         self._s.http_timeout = int(self._timeout_row.get_value())
         try:
             self._s.save()
@@ -365,7 +391,66 @@ class PreferencesDialog(Adw.PreferencesDialog):
     def _reset(self, _btn):
         self._bo3_row.set_text("")
         self._src_row.set_text("")
+        self._launchopts_pref_row.set_text("")
+        self._appid_pref_row.set_text("")
         self._timeout_row.set_value(30)
+
+    # ── Non-Steam AppID auto-detect ──
+    def _detect_non_steam_appid(self, _btn):
+        """Look through Steam's shortcuts.vdf files for a BO3-ish entry."""
+        try:
+            hits = steam_config.find_non_steam_bo3_shortcuts()
+        except Exception as exc:  # noqa: BLE001
+            show_error_dialog(self, "Could not scan Steam shortcuts", exc)
+            return
+
+        if not hits:
+            dlg = Adw.AlertDialog(
+                heading="No Non-Steam BO3 shortcut found",
+                body=(
+                    "Steam has no 'Non-Steam game' shortcut whose name or exe "
+                    "looks like BO3.\n\n"
+                    "If you added BO3 to Steam manually, make sure the shortcut "
+                    "name contains 'BO3' or 'Black Ops 3', then try again. "
+                    "Otherwise leave this field empty — the app will use the "
+                    "default retail AppID 311210."
+                ),
+            )
+            dlg.add_response("ok", "OK")
+            dlg.present(self)
+            return
+
+        if len(hits) == 1:
+            hit = hits[0]
+            self._appid_pref_row.set_text(hit.appid)
+            dlg = Adw.AlertDialog(
+                heading="Non-Steam BO3 shortcut found",
+                body=(
+                    f"Filled in AppID {hit.appid} for shortcut “{hit.name}”.\n\n"
+                    f"Exe: {hit.exe or '(unknown)'}"
+                ),
+            )
+            dlg.add_response("ok", "OK")
+            dlg.present(self)
+            return
+
+        # Multiple candidates — let the user pick.
+        dlg = Adw.AlertDialog(
+            heading="Multiple BO3 shortcuts found",
+            body="Which one should we set launch options for?",
+        )
+        for i, hit in enumerate(hits):
+            dlg.add_response(str(i), f"{hit.name}  ·  {hit.appid}")
+        dlg.add_response("cancel", "Cancel")
+        dlg.set_close_response("cancel")
+
+        def on_resp(_d, resp):
+            if resp == "cancel" or not resp.isdigit():
+                return
+            self._appid_pref_row.set_text(hits[int(resp)].appid)
+
+        dlg.connect("response", on_resp)
+        dlg.present(self)
 
 
 # ── debug log dialog ────────────────────────────────────────────────
@@ -764,12 +849,26 @@ class MainWindow(Adw.ApplicationWindow):
         return (self._settings.launch_options_override
                 or steam_config.BO3_LAUNCH_OPTIONS)
 
+    def _target_appid(self) -> str:
+        """AppID whose LaunchOptions we set — override for Non-Steam BO3."""
+        return (self._settings.launch_options_appid_override
+                or steam_config.BO3_APPID)
+
     def _refresh_launch_options(self):
         """Poll ``localconfig.vdf`` in a worker thread and update the row."""
         target = self._target_launch_options()
+        appid = self._target_appid()
+
+        # Reflect the active AppID in the row title so an override is obvious.
+        if appid == steam_config.BO3_APPID:
+            self._launchopts_row.set_title("Steam launch options")
+        else:
+            self._launchopts_row.set_title(
+                f"Steam launch options (Non-Steam AppID {appid})"
+            )
 
         def worker():
-            return steam_config.check_status(target=target)
+            return steam_config.check_status(target=target, appid=appid)
 
         def done(status, error):
             if error is not None:
@@ -851,6 +950,7 @@ class MainWindow(Adw.ApplicationWindow):
             self._launchopts_row.set_subtitle("Closing Steam…")
 
             target = self._target_launch_options()
+            appid = self._target_appid()
 
             def worker():
                 if not steam_config.request_steam_shutdown():
@@ -861,7 +961,7 @@ class MainWindow(Adw.ApplicationWindow):
                     raise TimeoutError(
                         "Steam did not exit within 25 s. Please close it manually and retry."
                     )
-                steam_config.set_launch_options(cfg, target)
+                steam_config.set_launch_options(cfg, target, appid=appid)
                 return True
 
             def done(_res, error):
@@ -882,9 +982,10 @@ class MainWindow(Adw.ApplicationWindow):
         self._launchopts_btn.set_sensitive(False)
         self._launchopts_row.set_subtitle("Writing localconfig.vdf…")
         target = self._target_launch_options()
+        appid = self._target_appid()
 
         def worker():
-            steam_config.set_launch_options(cfg, target)
+            steam_config.set_launch_options(cfg, target, appid=appid)
             return True
 
         def done(_res, error):

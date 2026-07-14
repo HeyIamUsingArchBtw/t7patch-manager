@@ -35,6 +35,12 @@ class Settings:
     # ``WINEDLLOVERRIDES="dsound=n,b" %command%``. Left empty for 99% of users.
     launch_options_override: str | None = None
 
+    # Manual override for the Steam AppID whose LaunchOptions we set. Default
+    # is 311210 (retail BO3). Set this if you added BO3 to Steam as a
+    # "Non-Steam game" — Steam then assigns a per-user shortcut AppID like
+    # ``2879137456`` which the user has to find themselves (see README).
+    launch_options_appid_override: str | None = None
+
     # Network timeouts (seconds)
     http_timeout: int = 30
 

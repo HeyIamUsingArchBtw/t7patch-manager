@@ -48,15 +48,45 @@ def _library_paths(steam_root: Path) -> list[Path]:
     return libs
 
 
+# Common places a Non-Steam BO3 install ends up on Linux. All checked in
+# order and the first one that ``looks_like_bo3()`` wins.
+_NON_STEAM_BO3_HINTS = [
+    # GOG-style / manual DRM-free installs
+    Path.home() / "Games" / BO3_INSTALLDIR,
+    Path.home() / "Games" / "Black Ops 3",
+    Path.home() / "Games" / "BO3",
+    Path.home() / BO3_INSTALLDIR,
+    # Lutris (default install dir)
+    Path.home() / "Games" / "lutris" / "black-ops-3" / "drive_c" / "Program Files" / BO3_INSTALLDIR,
+    Path.home() / ".local" / "share" / "lutris" / "runners" / "wine" / "prefixes" / "bo3" / "drive_c" / "Program Files" / BO3_INSTALLDIR,
+    # Heroic (used for Epic/GOG/Amazon on Linux)
+    Path.home() / "Games" / "Heroic" / BO3_INSTALLDIR,
+    Path.home() / "Games" / "Heroic" / "Black Ops 3",
+    # Bottles
+    Path.home() / ".local" / "share" / "bottles" / "bottles" / "bo3" / "drive_c" / "Program Files" / BO3_INSTALLDIR,
+]
+
+
 def find_bo3_dir() -> Path | None:
-    """Return the absolute path of the BO3 install folder, or None."""
+    """Return the absolute path of the BO3 install folder, or None.
+
+    Prefers Steam's library listing, then falls back to well-known Non-Steam
+    install locations (Lutris, Heroic, Bottles, plain ``~/Games/…``) so users
+    with a Non-Steam BO3 get auto-detected too. Any hit is sanity-checked
+    against :func:`looks_like_bo3` — so a Lutris folder without a
+    ``BlackOps3.exe`` won't be mistaken for a real install.
+    """
     root = _steam_root()
-    if not root:
-        return None
-    for lib in _library_paths(root):
-        candidate = lib / "steamapps" / "common" / BO3_INSTALLDIR
-        if candidate.is_dir():
+    if root is not None:
+        for lib in _library_paths(root):
+            candidate = lib / "steamapps" / "common" / BO3_INSTALLDIR
+            if candidate.is_dir() and looks_like_bo3(candidate):
+                return candidate
+
+    for candidate in _NON_STEAM_BO3_HINTS:
+        if candidate.is_dir() and looks_like_bo3(candidate):
             return candidate
+
     return None
 
 
