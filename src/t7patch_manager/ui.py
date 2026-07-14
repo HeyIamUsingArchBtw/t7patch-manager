@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import threading
 import traceback
+from importlib import resources
 from pathlib import Path
 from typing import Callable
 
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from . import __version__, config, installer, launcher, opener, paths, state
 from .logger import configure as configure_logging
@@ -19,6 +20,63 @@ APP_ID = "io.github.heyiamusingarchbtw.T7PatchManager"
 ISSUE_URL = "https://github.com/HeyIamUsingArchBtw/t7patch-manager/issues/new"
 
 log = configure_logging()
+
+
+# ── asset loading ───────────────────────────────────────────────────
+def _find_data_file(name: str) -> Path | None:
+    """Locate a bundled data file (CSS, SVG background) across install layouts.
+
+    Search order:
+
+    1. Packaged inside the wheel under ``t7patch_manager/data/<name>``
+       (⇒ ``importlib.resources``).
+    2. Sibling ``data/`` directory next to the package (source checkout /
+       pipx --editable).
+    3. Repo-root ``data/`` when running from a source checkout.
+
+    Returns ``None`` if the file can't be found — the caller is expected to
+    fall back gracefully (theme is a nice-to-have, not a hard requirement).
+    """
+    try:
+        with resources.as_file(resources.files("t7patch_manager") / "data" / name) as p:
+            if p.is_file():
+                return Path(p)
+    except (ModuleNotFoundError, FileNotFoundError):
+        pass
+    here = Path(__file__).resolve().parent
+    for candidate in (
+        here / "data" / name,               # inside the package
+        here.parent.parent / "data" / name, # <repo>/data (editable / source)
+        here.parent.parent.parent / "data" / name,  # src-layout: <repo>/src/../data
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _pango_tracking(label: Gtk.Label, *, spacing_1024: int = 1800) -> None:
+    """Give *label* BO3-style letter tracking.
+
+    GTK CSS ignores ``letter-spacing``, so we set it via a Pango attribute
+    instead. Value is in 1/1024 of a point (Pango's unit).
+    """
+    attrs = Pango.AttrList.new()
+    attrs.insert(Pango.attr_letter_spacing_new(spacing_1024 * Pango.SCALE // 1024))
+    label.set_attributes(attrs)
+
+
+def _apply_bo3_theme(display: Gdk.Display) -> None:
+    """Load our custom CSS globally so every window inherits BO3 styling."""
+    css_path = _find_data_file("style.css")
+    if css_path is None:
+        log.warning("style.css not found — falling back to default Adwaita.")
+        return
+    provider = Gtk.CssProvider()
+    provider.load_from_path(str(css_path))
+    Gtk.StyleContext.add_provider_for_display(
+        display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
+    log.debug("Loaded CSS from %s", css_path)
 
 
 # ── background helper ───────────────────────────────────────────────
@@ -348,7 +406,8 @@ class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application):
         super().__init__(application=app)
         self.set_title("T7Patch Manager")
-        self.set_default_size(580, 620)
+        self.set_default_size(620, 660)
+        self.add_css_class("bo3")
 
         self._settings = Settings.load()
         self._bo3_dir: Path | None = self._resolve_bo3_dir()
@@ -360,6 +419,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.set_content(toolbar)
 
         header = Adw.HeaderBar()
+        header.set_title_widget(self._build_header_title())
         toolbar.add_top_bar(header)
 
         menu = Gio.Menu()
@@ -372,11 +432,20 @@ class MainWindow(Adw.ApplicationWindow):
         menu.append("About", "app.about")
         header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu))
 
-        self._toaster = Adw.ToastOverlay()
-        toolbar.set_content(self._toaster)
+        # Overlay: painted BO3 background at the bottom, semi-transparent content on top.
+        stage = Gtk.Overlay()
+        stage.add_css_class("bo3-root")
+        toolbar.set_content(stage)
 
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18,
-                          margin_top=24, margin_bottom=24, margin_start=24, margin_end=24)
+        bg = self._build_background()
+        if bg is not None:
+            stage.set_child(bg)
+
+        self._toaster = Adw.ToastOverlay()
+        stage.add_overlay(self._toaster)
+
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20,
+                          margin_top=24, margin_bottom=24, margin_start=28, margin_end=28)
         self._toaster.set_child(content)
 
         # Update banner
@@ -384,14 +453,16 @@ class MainWindow(Adw.ApplicationWindow):
         self._banner.set_revealed(False)
         content.append(self._banner)
 
+        # Hero block: big "T7 PATCH" title + tagline
+        content.append(self._build_hero())
+
         # Status
-        status_group = Adw.PreferencesGroup()
+        status_group = Adw.PreferencesGroup(title="System")
         content.append(status_group)
 
         self._bo3_row = Adw.ActionRow(title="Black Ops III")
         self._bo3_row.set_subtitle("Detecting…")
-        # Suffix: a "Set path…" button that opens Preferences (helps when auto-detect fails)
-        self._bo3_row_fix = Gtk.Button(label="Set path…", css_classes=["pill"])
+        self._bo3_row_fix = Gtk.Button(label="Set path…")
         self._bo3_row_fix.connect("clicked", lambda *_: self._open_prefs())
         self._bo3_row_fix.set_visible(False)
         self._bo3_row.add_suffix(self._bo3_row_fix)
@@ -409,42 +480,84 @@ class MainWindow(Adw.ApplicationWindow):
         content.append(actions_group)
 
         self._install_btn = Gtk.Button(label="Install T7Patch",
-                                       css_classes=["suggested-action", "pill"])
+                                       css_classes=["suggested-action"])
         self._install_btn.connect("clicked", self._on_install)
         self._install_row = Adw.ActionRow(title="T7Patch",
                                           subtitle="Loading release info…")
         self._install_row.add_suffix(self._install_btn)
         actions_group.add(self._install_row)
 
-        self._play_btn = Gtk.Button(label="Play", css_classes=["pill"])
-        self._play_btn.connect("clicked", self._on_play)
-        play_row = Adw.ActionRow(title="Launch BO3",
-                                 subtitle="Opens Steam and starts the game")
-        play_row.add_suffix(self._play_btn)
-        actions_group.add(play_row)
-
-        self._config_btn = Gtk.Button(label="Edit…", css_classes=["pill"])
+        self._config_btn = Gtk.Button(label="Edit…")
         self._config_btn.connect("clicked", lambda *_: self._open_config_dialog())
         cfg_row = Adw.ActionRow(title="In-game name & network password",
                                 subtitle="Edit t7patch.conf")
         cfg_row.add_suffix(self._config_btn)
         actions_group.add(cfg_row)
 
+        # Big Play button, centred
+        self._play_btn = Gtk.Button(label="▶  Launch BO3",
+                                    css_classes=["bo3-play"])
+        self._play_btn.connect("clicked", self._on_play)
+        play_row = Gtk.CenterBox(margin_top=6, margin_bottom=6)
+        play_row.set_center_widget(self._play_btn)
+        content.append(play_row)
+
         # Footer hint
         hint = Gtk.Label(
             label=(
-                "<small>Steam launch options must be set to:\n"
+                "<small>Steam launch options must be set to\n"
                 "<tt>WINEDLLOVERRIDES=\"dsound=n,b\" %command%</tt>\n"
-                "(right-click BO3 in Steam → Properties → Launch options)</small>"
+                "Right-click BO3 in Steam → Properties → Launch options.</small>"
             ),
             use_markup=True, wrap=True,
             justify=Gtk.Justification.CENTER,
-            css_classes=["dim-label"],
+            css_classes=["bo3-hint"],
         )
         content.append(hint)
 
         self._refresh_status()
         self._check_latest_async()
+
+    # ── header / hero builders ──
+    def _build_header_title(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0, valign=Gtk.Align.CENTER)
+        title = Gtk.Label(label="T7 PATCH", css_classes=["bo3-accent"])
+        _pango_tracking(title, spacing_1024=2600)
+        subtitle = Gtk.Label(label="MANAGER", css_classes=["bo3-mono"])
+        _pango_tracking(subtitle, spacing_1024=3200)
+        box.append(title)
+        box.append(subtitle)
+        return box
+
+    def _build_background(self) -> Gtk.Widget | None:
+        svg_path = _find_data_file("bo3-bg.svg")
+        if svg_path is None:
+            log.debug("bo3-bg.svg not bundled — skipping decorative background.")
+            return None
+        pic = Gtk.Picture.new_for_filename(str(svg_path))
+        pic.set_content_fit(Gtk.ContentFit.COVER)
+        pic.set_can_focus(False)
+        pic.set_can_target(False)
+        pic.set_hexpand(True)
+        pic.set_vexpand(True)
+        # A hair of extra dimming on top of the SVG's own vignette — keeps
+        # foreground text comfortably readable at all window sizes.
+        pic.set_opacity(0.9)
+        return pic
+
+    def _build_hero(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
+                      margin_bottom=6, halign=Gtk.Align.CENTER)
+        title = Gtk.Label(label="BLACK OPS III", css_classes=["bo3-title"])
+        title.set_xalign(0.5)
+        _pango_tracking(title, spacing_1024=4800)
+        sub = Gtk.Label(label="T7 Patch · Multiplayer connectivity fix",
+                        css_classes=["bo3-subtitle"])
+        sub.set_xalign(0.5)
+        _pango_tracking(sub, spacing_1024=1200)
+        box.append(title)
+        box.append(sub)
+        return box
 
     # ── resolvers ──
     def _resolve_bo3_dir(self) -> Path | None:
@@ -705,6 +818,14 @@ class T7PatchApp(Adw.Application):
         self._window: MainWindow | None = None
 
     def do_activate(self):  # noqa: N802
+        # Force the dark libadwaita variant so our CSS lands on the intended
+        # base palette regardless of the desktop's global preference.
+        Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+
+        display = Gdk.Display.get_default()
+        if display is not None:
+            _apply_bo3_theme(display)
+
         if not self._window:
             self._window = MainWindow(self)
             self._install_actions()

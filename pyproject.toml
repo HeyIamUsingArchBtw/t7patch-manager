@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "t7patch-manager"
-version = "0.2.2"
+version = "0.3.0"
 description = "Install, launch, toggle and configure T7Patch v3 for Call of Duty: Black Ops III on Linux"
 readme = "README.md"
 license = { text = "MIT" }
@@ -31,3 +31,6 @@ Upstream = "https://github.com/Scroptss/T7Patch"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+t7patch_manager = ["data/*.css", "data/*.svg"]
