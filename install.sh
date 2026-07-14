@@ -12,6 +12,7 @@
 #   ./install.sh --no-launch  # skip the "start now" prompt at the end
 #   ./install.sh --skip-deps  # skip system-package step
 #   ./install.sh --use-pip    # skip pipx; use ~/.venv (last-resort fallback)
+#   ./install.sh --yes        # non-interactive; answer 'yes' to all prompts
 
 set -euo pipefail
 
@@ -41,6 +42,7 @@ LAUNCH=1
 SKIP_DEPS=0
 USE_PIP=0
 DIAGNOSE=0
+ASSUME_YES=0
 for arg in "$@"; do
     case "$arg" in
         --uninstall) MODE="uninstall" ;;
@@ -48,6 +50,7 @@ for arg in "$@"; do
         --skip-deps) SKIP_DEPS=1 ;;
         --use-pip)   USE_PIP=1 ;;
         --diagnose)  MODE="diagnose"; DIAGNOSE=1 ;;
+        --yes|-y)    ASSUME_YES=1 ;;
         -h|--help)
             sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0
@@ -243,9 +246,13 @@ elif [[ "$PM" == "unknown" ]]; then
     • pipx               (pipx or python3-pipx)
 
 EOF
-    printf "Continue anyway? [y/N] "
-    read -r reply
-    [[ "$reply" =~ ^[Yy]$ ]] || exit 1
+    if (( ASSUME_YES )); then
+        info "--yes: continuing without a supported package manager."
+    else
+        printf "Continue anyway? [y/N] "
+        read -r reply
+        [[ "$reply" =~ ^[Yy]$ ]] || exit 1
+    fi
 else
     MISSING=()
     for pkg in "${DEPS[@]}"; do
@@ -273,13 +280,41 @@ PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_i
 ok "python3 → $PY_VER"
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
     || fail "Python 3.11+ required; you have $PY_VER."
-if ! python3 -c 'import gi; gi.require_version("Gtk","4.0"); gi.require_version("Adw","1"); from gi.repository import Gtk, Adw' 2>/dev/null; then
-    warn "GTK 4 + libadwaita Python bindings are not importable."
+
+check_gtk_stack() {
+    python3 -c 'import gi; gi.require_version("Gtk","4.0"); gi.require_version("Adw","1"); from gi.repository import Gtk, Adw' 2>/dev/null
+}
+
+if ! check_gtk_stack; then
+    warn "GTK 4 + libadwaita Python bindings still not importable."
+    # Auto-recovery: try installing DEPS again on a supported PM even if the
+    # earlier pass "succeeded" (e.g. package names differ across releases).
+    if (( ! SKIP_DEPS )) && [[ "$PM" != "unknown" ]] && (( ${#DEPS[@]} > 0 )); then
+        info "Attempting one more pass to install the GTK stack via $PM_NAME…"
+        if [[ "$PM" == "apt" ]]; then
+            sudo apt-get update -qq || true
+        fi
+        "${PM_INSTALL[@]}" "${DEPS[@]}" || true
+    fi
+fi
+
+if ! check_gtk_stack; then
     cat <<EOF
 
-  The app will not run without these. Install your distro's PyGObject +
-  GTK 4 + libadwaita packages. Then re-run:  ./install.sh
-  Or run:  ./install.sh --diagnose  for a detailed check.
+  The app needs GTK 4 + libadwaita and their Python bindings (PyGObject).
+  These MUST come from your distro — pip can't install them safely.
+
+  Install them by hand for your distro, then re-run ./install.sh:
+
+    Arch/CachyOS/Manjaro : sudo pacman -S python-gobject gtk4 libadwaita
+    Debian/Ubuntu/Mint   : sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1
+    Fedora/RHEL          : sudo dnf install python3-gobject gtk4 libadwaita
+    openSUSE             : sudo zypper install python3-gobject gtk4 libadwaita
+    Void                 : sudo xbps-install python3-gobject gtk4 libadwaita
+    Alpine               : sudo apk add py3-gobject3 gtk4.0 libadwaita
+    Solus                : sudo eopkg install python-gobject libgtk-4 libadwaita
+
+  Run  ./install.sh --diagnose  for a detailed status report.
 
 EOF
     fail "Aborting install."
@@ -318,9 +353,29 @@ fi
 header "Step 3/4 — Installing t7patch-manager"
 
 install_via_pipx() {
+    # pipx doesn't accept --system-site-packages on `install`, but we NEED the
+    # distro's PyGObject/GTK to be visible inside the venv. Workaround: install
+    # first, then flip the venv's pyvenv.cfg to include system site-packages.
     command -v pipx &>/dev/null || return 1
     pipx list --short 2>/dev/null | grep -q '^t7patch-manager ' && pipx uninstall t7patch-manager &>/dev/null || true
-    pipx install --system-site-packages "$SCRIPT_DIR"
+    pipx install "$SCRIPT_DIR" || return 1
+    local venv_cfg="$HOME/.local/share/pipx/venvs/t7patch-manager/pyvenv.cfg"
+    if [[ -f "$venv_cfg" ]]; then
+        if grep -q '^include-system-site-packages' "$venv_cfg"; then
+            sed -i 's/^include-system-site-packages.*/include-system-site-packages = true/' "$venv_cfg"
+        else
+            echo 'include-system-site-packages = true' >> "$venv_cfg"
+        fi
+    fi
+    # Verify PyGObject is actually reachable from the pipx venv now.
+    local pipx_py="$HOME/.local/share/pipx/venvs/t7patch-manager/bin/python"
+    if [[ -x "$pipx_py" ]]; then
+        if ! "$pipx_py" -c 'import gi; gi.require_version("Gtk","4.0"); gi.require_version("Adw","1"); from gi.repository import Gtk, Adw' 2>/dev/null; then
+            warn "pipx venv can't see system PyGObject even with system-site-packages."
+            return 1
+        fi
+    fi
+    return 0
 }
 
 install_via_venv() {
@@ -384,9 +439,13 @@ cat <<EOF
 EOF
 
 if (( LAUNCH )) && command -v t7patch-manager &>/dev/null; then
-    printf "Start T7Patch Manager now? [Y/n] "
-    read -r reply
-    if [[ ! "$reply" =~ ^[Nn]$ ]]; then
+    if (( ASSUME_YES )); then
         (nohup t7patch-manager >/dev/null 2>&1 &) || true
+    else
+        printf "Start T7Patch Manager now? [Y/n] "
+        read -r reply
+        if [[ ! "$reply" =~ ^[Nn]$ ]]; then
+            (nohup t7patch-manager >/dev/null 2>&1 &) || true
+        fi
     fi
 fi

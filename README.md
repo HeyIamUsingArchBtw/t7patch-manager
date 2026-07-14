@@ -20,13 +20,12 @@ makes multiplayer for **Call of Duty: Black Ops III** work again on Linux.
 - Linux with a working Steam install
 - Black Ops III owned in Steam
 - **Proton** (Proton-GE or Proton Experimental — either works with T7Patch v3)
-- **GTK 4 + libadwaita** (already present on GNOME, KDE Plasma 6, and most Arch-based distros)
+- **GTK 4 + libadwaita** (shipped with GNOME, KDE Plasma 6, and most modern desktops)
 - Python 3.11+ and PyGObject
 
-On CachyOS / Arch:
-```fish
-sudo pacman -S --needed python python-gobject gtk4 libadwaita
-```
+**You don't need to install any of these by hand — `./install.sh` does it for you.**
+It auto-detects your distro's package manager and installs whatever is
+missing. See below.
 
 ## Install
 
@@ -48,10 +47,26 @@ The installer auto-detects your package manager and works on all major distros:
 | Alpine                                         | `apk`           |
 | Solus                                          | `eopkg`         |
 
-It installs system dependencies (Python 3.11+, PyGObject, GTK 4, libadwaita,
-pipx), sets up `~/.local/bin` in your PATH (fish/bash/zsh detected), installs
-the app via `pipx --system-site-packages`, registers the desktop entry, and
-offers to launch it. Run `./install.sh --uninstall` to reverse everything.
+The script:
+
+1. detects your package manager and installs anything missing (Python 3.11+,
+   PyGObject, GTK 4, libadwaita, pipx),
+2. verifies that `import gi; Gtk; Adw` actually works from Python — if not, it
+   auto-retries a second install pass,
+3. puts `~/.local/bin` on your PATH (fish/bash/zsh detected),
+4. installs the app via `pipx`, then enables `include-system-site-packages` on
+   the pipx venv so it can see your distro's PyGObject,
+5. registers a `.desktop` entry + icon, and
+6. offers to launch the app.
+
+Additional flags:
+
+- `./install.sh --yes` — non-interactive; useful for scripts.
+- `./install.sh --diagnose` — print environment status without touching anything.
+- `./install.sh --use-pip` — skip pipx; use a plain `venv` at
+  `~/.local/share/t7patch-manager/venv` (last-resort fallback).
+- `./install.sh --skip-deps` — don't touch system packages.
+- `./install.sh --uninstall` — reverse everything the installer put in place.
 
 On unsupported package managers the script lists the packages you need and
 continues with `--skip-deps`.
@@ -64,12 +79,28 @@ yay -S t7patch-manager
 ```
 
 ### Manual (from source)
-```fish
+If you'd rather do it by hand, install the system packages for your distro
+first:
+
+```bash
+# Arch / CachyOS / Manjaro
+sudo pacman -S --needed python python-gobject gtk4 libadwaita python-pipx
+# Debian / Ubuntu / Mint
+sudo apt install python3 python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 pipx
+# Fedora
+sudo dnf install python3 python3-gobject gtk4 libadwaita pipx
+```
+
+Then:
+
+```bash
 git clone https://github.com/HeyIamUsingArchBtw/t7patch-manager
 cd t7patch-manager
-pipx install --system-site-packages .
+pipx install .
+# Let pipx see the system PyGObject:
+echo 'include-system-site-packages = true' \
+    >> ~/.local/share/pipx/venvs/t7patch-manager/pyvenv.cfg
 ```
-The `--system-site-packages` flag lets pipx see your distro's PyGObject.
 
 ## Usage
 
@@ -170,13 +201,12 @@ von **Call of Duty: Black Ops III** unter Linux wieder zum Laufen bringt.
 - Linux mit funktionierender Steam-Installation
 - BO3 in Steam gekauft
 - **Proton** (Proton-GE oder Proton Experimental — beides läuft mit T7Patch v3)
-- **GTK 4 + libadwaita**
+- **GTK 4 + libadwaita** (bei GNOME, KDE Plasma 6 und den meisten modernen Desktops schon dabei)
 - Python 3.11+ mit PyGObject
 
-Auf CachyOS / Arch:
-```fish
-sudo pacman -S --needed python python-gobject gtk4 libadwaita
-```
+**Du musst nichts davon selbst installieren — `./install.sh` erledigt das für
+dich.** Der Installer erkennt deinen Paketmanager und installiert automatisch
+nach, was fehlt.
 
 ### Installation
 
@@ -191,10 +221,26 @@ gängigen Distributionen: `pacman` (Arch/CachyOS/Manjaro), `apt` (Debian/Ubuntu
 und Derivate), `dnf` (Fedora/RHEL/Nobara), `zypper` (openSUSE), `xbps` (Void),
 `apk` (Alpine), `eopkg` (Solus).
 
-Es installiert System-Pakete (Python 3.11+, PyGObject, GTK 4, libadwaita, pipx),
-trägt `~/.local/bin` in den PATH ein (fish/bash/zsh erkannt), installiert die
-App via `pipx --system-site-packages`, registriert den Desktop-Eintrag und
-startet sie optional direkt. Zum sauberen Entfernen: `./install.sh --uninstall`.
+Das Script:
+
+1. erkennt deinen Paketmanager und installiert fehlende System-Pakete
+   (Python 3.11+, PyGObject, GTK 4, libadwaita, pipx),
+2. prüft danach mit `import gi; Gtk; Adw`, ob die Bindings wirklich importierbar
+   sind — falls nicht, wird ein zweiter Install-Durchlauf gestartet,
+3. trägt `~/.local/bin` in deinen PATH ein (fish/bash/zsh erkannt),
+4. installiert die App via `pipx` und aktiviert `include-system-site-packages`
+   im pipx-venv, damit dein System-PyGObject sichtbar bleibt,
+5. registriert Desktop-Eintrag + Icon und
+6. bietet an, die App direkt zu starten.
+
+Weitere Flags:
+
+- `./install.sh --yes` — nicht-interaktiv (alle Prompts automatisch „ja").
+- `./install.sh --diagnose` — Umgebung prüfen ohne etwas zu ändern.
+- `./install.sh --use-pip` — pipx überspringen; fester venv als Fallback.
+- `./install.sh --skip-deps` — System-Pakete unangetastet lassen.
+- `./install.sh --uninstall` — alles rückgängig machen, was der Installer
+  eingerichtet hat.
 
 #### Über das AUR (sobald verfügbar)
 ```fish
