@@ -670,6 +670,9 @@ class MainWindow(Adw.ApplicationWindow):
         super().__init__(application=app)
         self.set_title("T7Patch Manager")
         self.set_default_size(620, 660)
+        # Absolute minimum so header + at least one row is always visible.
+        # Anything smaller becomes scrollable rather than clipped.
+        self.set_size_request(360, 280)
         self.add_css_class("bo3")
 
         self._settings = Settings.load()
@@ -707,9 +710,22 @@ class MainWindow(Adw.ApplicationWindow):
         self._toaster = Adw.ToastOverlay()
         stage.add_overlay(self._toaster)
 
+        # Wrap the main content in a ScrolledWindow so shrinking the window
+        # never hides rows / menu entries below the fold. propagate-natural-
+        # width keeps the content column at its natural width when the
+        # window is wider than needed, so nothing looks stretched.
+        self._main_scroller = Gtk.ScrolledWindow(
+            hexpand=True, vexpand=True,
+            hscrollbar_policy=Gtk.PolicyType.NEVER,
+            vscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
+            propagate_natural_width=True,
+            propagate_natural_height=False,
+        )
+        self._toaster.set_child(self._main_scroller)
+
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20,
                           margin_top=24, margin_bottom=24, margin_start=28, margin_end=28)
-        self._toaster.set_child(content)
+        self._main_scroller.set_child(content)
 
         # Update banner
         self._banner = Adw.Banner()
@@ -1130,8 +1146,11 @@ class MainWindow(Adw.ApplicationWindow):
 
             # Compose subtitle.
             if not st.installed:
-                subtitle = f"{wrapper} not installed — install it first"
-                row.set_sensitive(False)
+                # Row stays sensitive: flipping the switch to 'on' triggers
+                # the auto-installer (see _on_wrapper_toggled). Turning off
+                # a not-installed wrapper is a harmless no-op.
+                subtitle = f"{wrapper} not installed — turn on to install"
+                row.set_sensitive(True)
             elif overridden:
                 subtitle = (
                     "Disabled while a custom launch string is set in Preferences."
