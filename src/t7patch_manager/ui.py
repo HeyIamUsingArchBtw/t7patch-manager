@@ -556,10 +556,15 @@ class MainWindow(Adw.ApplicationWindow):
             self._install_btn.set_sensitive(True)
 
     # ── async update check ──
-    def _check_latest_async(self):
+    def _check_latest_async(self, *, user_initiated: bool = False):
         repo = self._settings.effective_repo()
         timeout = self._settings.http_timeout
         override = self._settings.patch_source_override
+
+        # Visible feedback while the network call runs.
+        self._install_row.set_subtitle("Checking for updates…")
+        if user_initiated:
+            self._toast("Checking for updates…", timeout=2)
 
         def _done(result, error):
             if error or not result:
@@ -569,6 +574,8 @@ class MainWindow(Adw.ApplicationWindow):
                     self._install_row.set_subtitle("Installed. (Update check failed)")
                 if error:
                     log.warning("Update check failed: %s", error)
+                    if user_initiated:
+                        self._toast(f"Update check failed: {error}")
                 return
             self._latest_tag = result.tag
             log.info("Latest T7Patch: %s (from %s)", result.tag, result.source)
@@ -592,6 +599,16 @@ class MainWindow(Adw.ApplicationWindow):
                 self._banner.set_revealed(True)
             else:
                 self._banner.set_revealed(False)
+
+            if user_initiated:
+                if installed and installed == result.tag:
+                    self._toast(f"You're on the latest: {result.tag}")
+                elif installed and result.source == "github":
+                    self._toast(f"Update available: {result.tag}")
+                elif not installed:
+                    self._toast(f"Latest T7Patch: {result.tag}")
+                else:
+                    self._toast(f"Latest: {result.tag}")
 
         run_in_thread(installer.fetch_latest_release, repo, timeout, override, on_done=_done)
 
@@ -703,7 +720,7 @@ class T7PatchApp(Adw.Application):
         w = self._window
         actions = (
             ("edit-config",   lambda *_: w._open_config_dialog()),
-            ("check-updates", lambda *_: w._check_latest_async()),
+            ("check-updates", lambda *_: w._check_latest_async(user_initiated=True)),
             ("open-bo3",      lambda *_: self._open_bo3_folder()),
             ("prefs",         lambda *_: w._open_prefs()),
             ("log",           lambda *_: LogDialog(w)),
@@ -747,28 +764,113 @@ class T7PatchApp(Adw.Application):
                 removed = installer.uninstall(w._bo3_dir)
                 w._toast(f"Removed {len(removed)} file(s)")
                 log.info("Uninstalled %d file(s)", len(removed))
+                # Force the UI back to a clean 'not installed' state:
+                # detection now sees no DLLs and no version marker.
+                w._banner.set_revealed(False)
+                w._refresh_status()
+                # Kick off a fresh update-check so the Actions row shows
+                # the latest tag as installable again.
+                w._check_latest_async()
             except Exception as exc:  # noqa: BLE001
                 log.exception("Uninstall failed")
                 show_error_dialog(w, "Uninstall failed", exc)
-            w._refresh_status()
+                w._refresh_status()
 
         dlg.connect("response", _on)
         dlg.present(w)
 
     def _show_about(self):
-        about = Adw.AboutDialog(
-            application_name="T7Patch Manager",
-            application_icon=APP_ID,
-            developer_name="HeyIamUsingArchBtw",
-            version=__version__,
-            website="https://github.com/HeyIamUsingArchBtw/t7patch-manager",
-            issue_url=ISSUE_URL,
-            license_type=Gtk.License.MIT_X11,
-            comments="Install, launch, toggle and configure T7Patch v3 for Call of Duty: Black Ops III on Linux.",
+        """Custom About dialog with fully English labels.
+
+        Adw.AboutDialog picks up the system locale for its built-in labels
+        (Details, Website, License …), which we don't want here — the
+        project's language is English. We render our own instead.
+        """
+        dlg = Adw.Dialog()
+        dlg.set_title("About")
+        dlg.set_content_width(420)
+
+        toolbar = Adw.ToolbarView()
+        dlg.set_child(toolbar)
+
+        header = Adw.HeaderBar()
+        header.set_show_end_title_buttons(False)
+        close_btn = Gtk.Button(label="Close")
+        close_btn.connect("clicked", lambda *_: dlg.close())
+        header.pack_end(close_btn)
+        toolbar.add_top_bar(header)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8,
+                       margin_top=24, margin_bottom=20, margin_start=24, margin_end=24)
+        toolbar.set_content(body)
+
+        icon = Gtk.Image.new_from_icon_name(APP_ID)
+        icon.set_pixel_size(96)
+        icon.set_margin_bottom(4)
+        body.append(icon)
+
+        name_lbl = Gtk.Label(label="T7Patch Manager")
+        name_lbl.add_css_class("title-1")
+        body.append(name_lbl)
+
+        version_lbl = Gtk.Label(label=f"Version {__version__}")
+        version_lbl.add_css_class("dim-label")
+        body.append(version_lbl)
+
+        summary = Gtk.Label(
+            label="Install, launch, toggle and configure T7Patch v3\n"
+                  "for Call of Duty: Black Ops III on Linux.",
+            justify=Gtk.Justification.CENTER,
+            wrap=True,
         )
-        about.add_credit_section("T7Patch v3 by", ["Scroptss https://github.com/Scroptss/T7Patch"])
-        about.add_credit_section("Original T7Patch by", ["shiversoftdev https://github.com/shiversoftdev/t7patch"])
-        about.present(self._window)
+        summary.set_margin_top(8)
+        body.append(summary)
+
+        links_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8,
+                            halign=Gtk.Align.CENTER)
+        links_box.set_margin_top(12)
+        for label, url in (
+            ("Website",       "https://github.com/HeyIamUsingArchBtw/t7patch-manager"),
+            ("Report an issue", ISSUE_URL),
+        ):
+            b = Gtk.Button(label=label, css_classes=["pill"])
+            b.connect("clicked", lambda _b, u=url: self._open_link(u))
+            links_box.append(b)
+        body.append(links_box)
+
+        # Credits
+        credits_group = Adw.PreferencesGroup()
+        credits_group.set_margin_top(16)
+        body.append(credits_group)
+
+        for title, name, url in (
+            ("App", "HeyIamUsingArchBtw",
+             "https://github.com/HeyIamUsingArchBtw/t7patch-manager"),
+            ("T7Patch v3", "Scroptss", "https://github.com/Scroptss/T7Patch"),
+            ("Original T7Patch", "shiversoftdev",
+             "https://github.com/shiversoftdev/t7patch"),
+        ):
+            row = Adw.ActionRow(title=title, subtitle=name)
+            open_btn = Gtk.Button(icon_name="adw-external-link-symbolic",
+                                  valign=Gtk.Align.CENTER, css_classes=["flat"])
+            open_btn.set_tooltip_text(url)
+            open_btn.connect("clicked", lambda _b, u=url: self._open_link(u))
+            row.add_suffix(open_btn)
+            row.set_activatable_widget(open_btn)
+            credits_group.add(row)
+
+        license_lbl = Gtk.Label(label="Released under the MIT License.")
+        license_lbl.add_css_class("dim-label")
+        license_lbl.set_margin_top(16)
+        body.append(license_lbl)
+
+        dlg.present(self._window)
+
+    def _open_link(self, url: str):
+        try:
+            opener.open_url(url)
+        except Exception as exc:  # noqa: BLE001
+            show_error_dialog(self._window, "Could not open link", exc)
 
 
 def main() -> int:

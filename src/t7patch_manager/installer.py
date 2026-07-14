@@ -245,7 +245,16 @@ def extract_patch_into(bo3_dir: Path, zip_bytes: bytes,
 
 
 def uninstall(bo3_dir: Path, delete_conf: bool = False) -> list[Path]:
-    """Remove patch DLLs (and optionally the conf). Restores *.bak backups."""
+    """Remove patch DLLs and the version marker.
+
+    * Removes ``dsound.dll``, ``t7patch.dll``, ``t7patchloader.dll`` in both
+      their active and ``*.disabled`` variants.
+    * Restores ``*.bak`` files if any were saved on first install.
+    * Removes the ``t7patch.version`` marker so status detection reports
+      the patch as gone.
+    * Optionally removes ``t7patch.conf`` (off by default — the user's
+      in-game name / password is worth keeping across reinstalls).
+    """
     removed: list[Path] = []
     for name in ("dsound.dll", "t7patch.dll", "t7patchloader.dll"):
         for candidate in (bo3_dir / name, bo3_dir / f"{name}.disabled"):
@@ -255,6 +264,10 @@ def uninstall(bo3_dir: Path, delete_conf: bool = False) -> list[Path]:
         bak = bo3_dir / f"{name}.bak"
         if bak.exists():
             bak.rename(bo3_dir / name)
+    version_marker = bo3_dir / "t7patch.version"
+    if version_marker.exists():
+        version_marker.unlink()
+        removed.append(version_marker)
     if delete_conf:
         conf = bo3_dir / "t7patch.conf"
         if conf.exists():
