@@ -30,16 +30,31 @@ sudo pacman -S --needed python python-gobject gtk4 libadwaita
 
 ## Install
 
-### One-shot installer (recommended, Arch-based distros)
-```fish
+### One-shot installer (recommended, any Linux distro)
+```bash
 git clone https://github.com/HeyIamUsingArchBtw/t7patch-manager
 cd t7patch-manager
 ./install.sh
 ```
-The installer handles everything: installs system dependencies via `pacman`,
-sets up `~/.local/bin` in your PATH (fish/bash/zsh), installs the app via
-`pipx`, registers the desktop entry, and offers to launch it. Run
-`./install.sh --uninstall` to reverse everything.
+The installer auto-detects your package manager and works on all major distros:
+
+| Distro family                                  | Package manager |
+|------------------------------------------------|-----------------|
+| Arch, CachyOS, Manjaro, EndeavourOS, Garuda    | `pacman`        |
+| Debian, Ubuntu, Pop!_OS, Mint, Zorin           | `apt`           |
+| Fedora, RHEL, Rocky, Alma, Nobara              | `dnf`           |
+| openSUSE Tumbleweed / Leap                     | `zypper`        |
+| Void Linux                                     | `xbps`          |
+| Alpine                                         | `apk`           |
+| Solus                                          | `eopkg`         |
+
+It installs system dependencies (Python 3.11+, PyGObject, GTK 4, libadwaita,
+pipx), sets up `~/.local/bin` in your PATH (fish/bash/zsh detected), installs
+the app via `pipx --system-site-packages`, registers the desktop entry, and
+offers to launch it. Run `./install.sh --uninstall` to reverse everything.
+
+On unsupported package managers the script lists the packages you need and
+continues with `--skip-deps`.
 
 ### AUR (once published)
 ```fish
@@ -130,16 +145,21 @@ sudo pacman -S --needed python python-gobject gtk4 libadwaita
 
 ### Installation
 
-#### Ein-Kommando-Installer (empfohlen, Arch-basierte Distros)
-```fish
+#### Ein-Kommando-Installer (empfohlen, jede Linux-Distro)
+```bash
 git clone https://github.com/HeyIamUsingArchBtw/t7patch-manager
 cd t7patch-manager
 ./install.sh
 ```
-Das Script macht alles: System-Pakete via `pacman` installieren, `~/.local/bin`
-in den PATH eintragen (fish/bash/zsh erkannt), App via `pipx` installieren,
-Desktop-Eintrag registrieren und optional direkt starten. Zum sauberen
-Entfernen: `./install.sh --uninstall`.
+Das Script erkennt deinen Paketmanager automatisch und funktioniert auf allen
+gängigen Distributionen: `pacman` (Arch/CachyOS/Manjaro), `apt` (Debian/Ubuntu
+und Derivate), `dnf` (Fedora/RHEL/Nobara), `zypper` (openSUSE), `xbps` (Void),
+`apk` (Alpine), `eopkg` (Solus).
+
+Es installiert System-Pakete (Python 3.11+, PyGObject, GTK 4, libadwaita, pipx),
+trägt `~/.local/bin` in den PATH ein (fish/bash/zsh erkannt), installiert die
+App via `pipx --system-site-packages`, registriert den Desktop-Eintrag und
+startet sie optional direkt. Zum sauberen Entfernen: `./install.sh --uninstall`.
 
 #### Über das AUR (sobald verfügbar)
 ```fish

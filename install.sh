@@ -1,19 +1,29 @@
 #!/usr/bin/env bash
-# T7Patch Manager — One-shot installer for Arch-based Linux distros
-# (CachyOS, Arch, Manjaro, EndeavourOS, Garuda, …)
+# T7Patch Manager — One-shot installer (works on all major Linux distros)
+#
+# Supported package managers:
+#   - pacman  (Arch, CachyOS, Manjaro, EndeavourOS, Garuda, …)
+#   - apt     (Debian, Ubuntu, Pop!_OS, Mint, Zorin, …)
+#   - dnf     (Fedora, RHEL, Rocky, Alma, Nobara, …)
+#   - zypper  (openSUSE Tumbleweed / Leap)
+#   - xbps    (Void Linux)
+#   - apk     (Alpine)
+#   - eopkg   (Solus)
+# Fallback: prints the package names to install manually, then continues.
 #
 # What this does:
-#   1. Checks you're on a supported (pacman-based) distro
-#   2. Installs system dependencies via pacman  (python-gobject, gtk4, libadwaita, pipx)
-#   3. Installs t7patch-manager itself via pipx --system-site-packages
+#   1. Detects your distro + package manager
+#   2. Installs system dependencies (python, PyGObject, GTK 4, libadwaita, pipx)
+#   3. Installs t7patch-manager via pipx --system-site-packages
 #   4. Ensures ~/.local/bin is on your PATH (fish + bash + zsh)
-#   5. Registers the desktop entry & icon so it shows up in your app menu
+#   5. Registers the desktop entry & icon
 #   6. Offers to launch the app right away
 #
 # Usage:
 #   ./install.sh              # normal install
 #   ./install.sh --uninstall  # remove everything this installer put in place
 #   ./install.sh --no-launch  # skip the "start now" prompt at the end
+#   ./install.sh --skip-deps  # skip the system-package step (for advanced users)
 
 set -euo pipefail
 
@@ -39,12 +49,14 @@ ICON_DST="$HOME/.local/share/icons/hicolor/scalable/apps/io.github.heyiamusingar
 
 MODE="install"
 LAUNCH=1
+SKIP_DEPS=0
 for arg in "$@"; do
     case "$arg" in
         --uninstall) MODE="uninstall" ;;
         --no-launch) LAUNCH=0 ;;
+        --skip-deps) SKIP_DEPS=1 ;;
         -h|--help)
-            sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *) fail "Unknown option: $arg (try --help)" ;;
@@ -53,17 +65,92 @@ done
 
 # ── Sanity checks ───────────────────────────────────────────────────
 if [[ $EUID -eq 0 ]]; then
-    fail "Don't run this as root. It installs into your \$HOME."
-fi
-
-if ! command -v pacman &>/dev/null; then
-    fail "This installer only supports Arch-based distros (CachyOS, Arch, Manjaro, …).
-   On other distros, please follow the manual instructions in README.md."
+    fail "Don't run this as root. It installs into your \$HOME.
+   The script will call sudo itself only when installing system packages."
 fi
 
 if [[ ! -f "$SCRIPT_DIR/pyproject.toml" ]]; then
     fail "install.sh must be run from the t7patch-manager repo root."
 fi
+
+# ── Package-manager detection ───────────────────────────────────────
+# For each PM we know:
+#   PM_NAME        — human name
+#   PM_INSTALL     — command to install a list of packages (needs sudo)
+#   PM_QUERY       — command that succeeds iff a package is installed
+#   PKG_*          — distro-specific package names
+detect_pm() {
+    if   command -v pacman &>/dev/null; then PM=pacman
+    elif command -v apt-get &>/dev/null; then PM=apt
+    elif command -v dnf   &>/dev/null;  then PM=dnf
+    elif command -v zypper &>/dev/null; then PM=zypper
+    elif command -v xbps-install &>/dev/null; then PM=xbps
+    elif command -v apk   &>/dev/null;  then PM=apk
+    elif command -v eopkg &>/dev/null;  then PM=eopkg
+    else PM="unknown"
+    fi
+}
+
+detect_pm
+
+# Distro pretty-name for the log
+if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    DISTRO_NAME=$( . /etc/os-release; echo "${PRETTY_NAME:-$NAME}" )
+else
+    DISTRO_NAME="unknown Linux"
+fi
+
+# Map generic dep-names → distro-specific package names
+case "$PM" in
+    pacman)
+        PM_NAME="pacman"
+        PM_INSTALL=(sudo pacman -S --needed --noconfirm)
+        PM_QUERY(){ pacman -Qi "$1" &>/dev/null; }
+        DEPS=(python python-gobject gtk4 libadwaita python-pipx)
+        ;;
+    apt)
+        PM_NAME="APT"
+        PM_INSTALL=(sudo apt-get install -y)
+        PM_QUERY(){ dpkg -s "$1" &>/dev/null; }
+        # python3-gi already pulls in libgirepository; gir1.2-adw-1 gives libadwaita bindings
+        DEPS=(python3 python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 pipx)
+        ;;
+    dnf)
+        PM_NAME="dnf"
+        PM_INSTALL=(sudo dnf install -y)
+        PM_QUERY(){ rpm -q "$1" &>/dev/null; }
+        DEPS=(python3 python3-gobject gtk4 libadwaita pipx)
+        ;;
+    zypper)
+        PM_NAME="zypper"
+        PM_INSTALL=(sudo zypper --non-interactive install)
+        PM_QUERY(){ rpm -q "$1" &>/dev/null; }
+        DEPS=(python3 python3-gobject gtk4 libadwaita python3-pipx)
+        ;;
+    xbps)
+        PM_NAME="XBPS"
+        PM_INSTALL=(sudo xbps-install -Sy)
+        PM_QUERY(){ xbps-query -e "$1" &>/dev/null; }
+        DEPS=(python3 python3-gobject gtk4 libadwaita python3-pipx)
+        ;;
+    apk)
+        PM_NAME="apk"
+        PM_INSTALL=(sudo apk add --no-cache)
+        PM_QUERY(){ apk info -e "$1" &>/dev/null; }
+        DEPS=(python3 py3-gobject3 gtk4.0 libadwaita py3-pipx)
+        ;;
+    eopkg)
+        PM_NAME="eopkg"
+        PM_INSTALL=(sudo eopkg install -y)
+        PM_QUERY(){ eopkg info "$1" 2>/dev/null | grep -q "Installed"; }
+        DEPS=(python3 python-gobject libgtk-4 libadwaita python-pipx)
+        ;;
+    unknown)
+        PM_NAME="unknown"
+        DEPS=()
+        ;;
+esac
 
 # ── Uninstall path ──────────────────────────────────────────────────
 if [[ "$MODE" == "uninstall" ]]; then
@@ -86,54 +173,107 @@ fi
 
 # ── Install path ────────────────────────────────────────────────────
 header "T7Patch Manager — Installer"
-info "Detected distro: $(source /etc/os-release && echo "$PRETTY_NAME")"
+info "Distro:          $DISTRO_NAME"
+info "Package manager: $PM_NAME"
 
-# 1. System dependencies via pacman
+# 1. System dependencies
 header "Step 1/4 — System dependencies"
-PACMAN_DEPS=(python python-gobject gtk4 libadwaita python-pipx)
-MISSING=()
-for pkg in "${PACMAN_DEPS[@]}"; do
-    if pacman -Qi "$pkg" &>/dev/null; then
-        ok "$pkg (already installed)"
-    else
-        MISSING+=("$pkg")
-    fi
-done
 
-if (( ${#MISSING[@]} > 0 )); then
-    info "Installing missing packages: ${MISSING[*]}"
-    if ! sudo pacman -S --needed --noconfirm "${MISSING[@]}"; then
-        fail "pacman failed. Please install manually: ${MISSING[*]}"
-    fi
-    ok "All pacman dependencies installed"
+if (( SKIP_DEPS )); then
+    warn "Skipping dependency install (--skip-deps). Make sure these are present:"
+    printf "   • GTK 4\n   • libadwaita\n   • Python 3.11+\n   • PyGObject (python3-gi / python-gobject)\n   • pipx\n"
+elif [[ "$PM" == "unknown" ]]; then
+    warn "No supported package manager detected."
+    cat <<EOF
+
+  Please install these dependencies manually with your distro's package manager,
+  then re-run this installer with --skip-deps:
+
+    • Python 3.11+          (typically: python3)
+    • PyGObject bindings    (typically: python3-gi, python-gobject, or py3-gobject3)
+    • GTK 4                 (typically: gtk4)
+    • libadwaita            (typically: libadwaita)
+    • pipx                  (typically: pipx or python3-pipx)
+
+EOF
+    printf "Continue anyway (assumes deps are already installed)? [y/N] "
+    read -r reply
+    [[ "$reply" =~ ^[Yy]$ ]] || exit 1
 else
-    ok "All pacman dependencies already present"
+    MISSING=()
+    for pkg in "${DEPS[@]}"; do
+        if PM_QUERY "$pkg"; then
+            ok "$pkg (already installed)"
+        else
+            MISSING+=("$pkg")
+        fi
+    done
+
+    if (( ${#MISSING[@]} > 0 )); then
+        info "Installing missing packages via $PM_NAME: ${MISSING[*]}"
+        # For apt, refresh the index first
+        if [[ "$PM" == "apt" ]]; then
+            sudo apt-get update -qq || warn "apt-get update failed — trying install anyway"
+        fi
+        if ! "${PM_INSTALL[@]}" "${MISSING[@]}"; then
+            fail "$PM_NAME failed. Please install manually: ${MISSING[*]}"
+        fi
+        ok "All dependencies installed"
+    else
+        ok "All dependencies already present"
+    fi
 fi
+
+# Verify what we actually need at runtime, regardless of PM
+info "Verifying runtime prerequisites…"
+if ! command -v python3 &>/dev/null; then
+    fail "python3 not found. Install Python 3.11+ and re-run."
+fi
+PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+info "  python3 → $PY_VER"
+if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+    fail "Python 3.11+ required; you have $PY_VER."
+fi
+if ! python3 -c 'import gi; gi.require_version("Gtk","4.0"); gi.require_version("Adw","1"); from gi.repository import Gtk, Adw' 2>/dev/null; then
+    fail "GTK 4 + libadwaita Python bindings not importable.
+   Install your distro's PyGObject + GTK 4 + libadwaita packages and re-run."
+fi
+ok "PyGObject + GTK 4 + libadwaita import OK"
+
+if ! command -v pipx &>/dev/null; then
+    fail "pipx not found. Install your distro's pipx package (or run: python3 -m pip install --user pipx)."
+fi
+ok "pipx found: $(pipx --version)"
 
 # 2. PATH check for ~/.local/bin (pipx installs binaries there)
 header "Step 2/4 — Shell PATH"
 LOCAL_BIN="$HOME/.local/bin"
 if [[ ":$PATH:" != *":$LOCAL_BIN:"* ]]; then
     warn "$LOCAL_BIN is not on your PATH yet."
-    # Detect user shell and offer to fix it
     USER_SHELL=$(basename "${SHELL:-bash}")
     case "$USER_SHELL" in
         fish)
             CONFIG="$HOME/.config/fish/config.fish"
             mkdir -p "$(dirname "$CONFIG")"
+            touch "$CONFIG"
             if ! grep -q "fish_add_path.*\\.local/bin" "$CONFIG" 2>/dev/null; then
-                echo "" >> "$CONFIG"
-                echo "# Added by t7patch-manager installer" >> "$CONFIG"
-                echo "fish_add_path -a \$HOME/.local/bin" >> "$CONFIG"
+                {
+                    echo ""
+                    echo "# Added by t7patch-manager installer"
+                    echo "fish_add_path -a \$HOME/.local/bin"
+                } >> "$CONFIG"
                 ok "Added ~/.local/bin to fish PATH ($CONFIG)"
             fi
             ;;
         bash|zsh)
             CONFIG="$HOME/.${USER_SHELL}rc"
+            touch "$CONFIG"
             if ! grep -q "\\.local/bin" "$CONFIG" 2>/dev/null; then
-                echo "" >> "$CONFIG"
-                echo "# Added by t7patch-manager installer" >> "$CONFIG"
-                echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$CONFIG"
+                {
+                    echo ""
+                    echo "# Added by t7patch-manager installer"
+                    echo 'export PATH="$HOME/.local/bin:$PATH"'
+                } >> "$CONFIG"
                 ok "Added ~/.local/bin to \$PATH ($CONFIG)"
             fi
             ;;
@@ -145,6 +285,9 @@ if [[ ":$PATH:" != *":$LOCAL_BIN:"* ]]; then
 else
     ok "~/.local/bin is on PATH"
 fi
+
+# Try to ensure pipx's own paths too (idempotent, quiet)
+pipx ensurepath >/dev/null 2>&1 || true
 
 # 3. Install via pipx
 header "Step 3/4 — Installing t7patch-manager"
@@ -195,7 +338,6 @@ if (( LAUNCH )); then
         read -r reply
         if [[ ! "$reply" =~ ^[Nn]$ ]]; then
             info "Launching…"
-            # detach so the installer exits cleanly
             (nohup t7patch-manager >/dev/null 2>&1 &) || true
         fi
     fi
