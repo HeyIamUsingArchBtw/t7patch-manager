@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <radialGradient id="bg" cx="30%" cy="20%" r="90%">
+      <stop offset="0" stop-color="#26314a"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Rounded background -->
+  <rect x="4" y="4" width="120" height="120" rx="24" ry="24" fill="url(#bg)"/>
+
+  <!-- "T" (geometric block, font-independent) -->
+  <path d="M 26 28 H 68 V 42 H 54 V 82 H 40 V 42 H 26 Z" fill="#ffffff"/>
+
+  <!-- "7" (geometric block, font-independent) -->
+  <path d="M 72 28 H 104 V 40 L 88 82 H 74 L 90 42 H 72 Z" fill="#ffffff"/>
+
+  <!-- Orange accent bar underscoring the mark -->
+  <rect x="18" y="94" width="92" height="8" rx="4" fill="#ff6b1a"/>
+
+  <!-- Small wrench glyph (bottom-right) hinting "manager" -->
+  <g stroke="#58a6ff" stroke-width="4.5" stroke-linecap="round" fill="none">
+    <circle cx="98" cy="114" r="5.5"/>
+    <path d="M 102 118 L 112 116"/>
+  </g>
+</svg>

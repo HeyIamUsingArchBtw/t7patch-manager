@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "t7patch-manager"
+version = "0.1.0"
+description = "Install, launch, toggle and configure T7Patch v3 for Call of Duty: Black Ops III on Linux"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "HeyIamUsingArchBtw" }]
+keywords = ["bo3", "black-ops-3", "t7patch", "call-of-duty", "linux", "proton", "gtk4"]
+classifiers = [
+    "Environment :: X11 Applications :: GTK",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Games/Entertainment",
+]
+# NOTE: PyGObject + libadwaita are system-level; not installable via pip on most distros.
+# Declared here for reference only, real deps live in packaging/aur/PKGBUILD.
+
+[project.scripts]
+t7patch-manager = "t7patch_manager.ui:main"
+
+[project.urls]
+Homepage = "https://github.com/HeyIamUsingArchBtw/t7patch-manager"
+Issues   = "https://github.com/HeyIamUsingArchBtw/t7patch-manager/issues"
+Upstream = "https://github.com/Scroptss/T7Patch"
+
+[tool.setuptools.packages.find]
+where = ["src"]

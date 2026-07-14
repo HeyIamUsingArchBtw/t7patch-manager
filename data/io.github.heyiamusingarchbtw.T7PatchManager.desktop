@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=T7Patch Manager
+GenericName=BO3 Community Patch Manager
+Comment=Install, launch, toggle and configure T7Patch v3 for Black Ops III
+Exec=t7patch-manager
+Icon=io.github.heyiamusingarchbtw.T7PatchManager
+Terminal=false
+Categories=Game;Utility;
+Keywords=bo3;black ops;call of duty;t7patch;proton;
+StartupNotify=true
