@@ -502,18 +502,22 @@ class MainWindow(Adw.ApplicationWindow):
         play_row.set_center_widget(self._play_btn)
         content.append(play_row)
 
-        # Footer hint
+        # Footer hint — wrapped in a dark panel so it stays legible on top
+        # of the decorative background.
         hint = Gtk.Label(
             label=(
-                "<small>Steam launch options must be set to\n"
+                "Steam launch options must be set to\n"
                 "<tt>WINEDLLOVERRIDES=\"dsound=n,b\" %command%</tt>\n"
-                "Right-click BO3 in Steam → Properties → Launch options.</small>"
+                "Right-click BO3 in Steam → Properties → Launch options."
             ),
             use_markup=True, wrap=True,
             justify=Gtk.Justification.CENTER,
             css_classes=["bo3-hint"],
         )
-        content.append(hint)
+        hint_panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
+                             css_classes=["bo3-hint-panel"])
+        hint_panel.append(hint)
+        content.append(hint_panel)
 
         self._refresh_status()
         self._check_latest_async()

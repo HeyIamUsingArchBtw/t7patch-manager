@@ -98,9 +98,21 @@ window.bo3 headerbar .title {
 }
 
 .bo3-hint {
-  color: @bo3_text_dim;
+  color: @bo3_text;
   font-size: 9pt;
-  letter-spacing: 0.02em;
+}
+
+.bo3-hint-panel {
+  background-color: rgba(8, 4, 2, 0.85);
+  border: 1px solid @bo3_border_soft;
+  border-left: 3px solid @bo3_accent;
+  padding: 10px 14px;
+}
+
+.bo3-hint-panel tt,
+.bo3-hint-panel .code {
+  color: @bo3_accent_hi;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Mono", monospace;
 }
 
 /* ── Card surfaces ───────────────────────────────────────── */
