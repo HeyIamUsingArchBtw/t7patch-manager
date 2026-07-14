@@ -143,13 +143,16 @@ Below the launch-options row you'll see two switches:
   GameMode temporarily bumps the CPU governor to `performance`, pins the
   CPU frequency, and gives the game realtime-ish scheduling priority. On
   laptops and CPUs with aggressive power-saving this is often the single
-  biggest fix for stutter and low 1% lows in menus and matches. Needs the
-  `gamemode` package (Arch/CachyOS: `sudo pacman -S gamemode`).
+  biggest fix for stutter and low 1% lows in menus and matches.
 - **Performance monitoring (MangoHud)** wraps BO3 in `mangohud`. This
   draws an FPS/CPU/GPU overlay on top of the game so you can see whether
-  a stutter is caused by GPU load, CPU load, or something else
-  entirely. Needs the `mangohud` package (Arch/CachyOS:
-  `sudo pacman -S mangohud`).
+  a stutter is caused by GPU load, CPU load, or something else entirely.
+
+If either tool isn't installed yet, flipping the switch to *on* prompts
+the app to install it for you: it detects your distro
+(Arch/CachyOS/Manjaro, Debian/Ubuntu/Mint, Fedora, openSUSE), asks for
+your password once via a polkit prompt, and shows a live log window
+with progress. On success it enables the wrapper automatically.
 
 Both switches rewrite Steam's launch string for you — they add
 `gamemoderun` and/or `mangohud` in front of `%command%` in the correct
@@ -341,13 +344,18 @@ Unter der Launch-Options-Zeile findest du zwei Schalter:
   CPU-Frequenz nach oben und gibt dem Spiel Echtzeit-nahe
   Scheduling-Priorität. Auf Laptops und CPUs mit aggressivem
   Power-Saving ist das oft der wichtigste Fix gegen Stotterer und
-  eingebrochene 1%-Lows in Menüs und Runden. Benötigt das
-  `gamemode`-Paket (Arch/CachyOS: `sudo pacman -S gamemode`).
+  eingebrochene 1%-Lows in Menüs und Runden.
 - **Performance monitoring (MangoHud)** wickelt BO3 in `mangohud` ein.
   Damit legt sich ein Overlay mit FPS-, CPU- und GPU-Werten übers
   Spiel, sodass du siehst ob ein Ruckler von der GPU-Last, der CPU-Last
-  oder was ganz anderem kommt. Benötigt das `mangohud`-Paket
-  (Arch/CachyOS: `sudo pacman -S mangohud`).
+  oder was ganz anderem kommt.
+
+Ist eins der Tools noch nicht installiert, bietet die App beim Umlegen
+des Schalters die Installation an: sie erkennt deine Distro
+(Arch/CachyOS/Manjaro, Debian/Ubuntu/Mint, Fedora, openSUSE), fragt
+einmal per Polkit-Dialog nach deinem Passwort und zeigt ein
+Live-Log-Fenster mit Fortschritt. Bei Erfolg wird der Wrapper danach
+automatisch aktiviert.
 
 Beide Schalter schreiben deinen Steam-Startstring für dich um — sie
 setzen `gamemoderun` und/oder `mangohud` in der korrekten Reihenfolge

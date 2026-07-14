@@ -12,7 +12,18 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
-from . import __version__, config, installer, launch_wrappers, launcher, opener, paths, state, steam_config
+from . import (
+    __version__,
+    config,
+    installer,
+    launch_wrappers,
+    launcher,
+    opener,
+    package_manager,
+    paths,
+    state,
+    steam_config,
+)
 from .logger import configure as configure_logging
 from .settings import Settings
 
@@ -513,6 +524,147 @@ class LogDialog(Adw.Dialog):
 
 
 # ── main window ─────────────────────────────────────────────────────
+class _InstallProgressDialog(Adw.Dialog):
+    """Modal dialog that shows a live-streaming package install.
+
+    Widgets from top to bottom:
+
+    1. ``self._stage_label`` — e.g. “Refreshing package index…” or “Done”.
+    2. ``self._progress`` — an indeterminate pulsing progress bar while
+       the child runs; a full solid bar on success; hidden on error.
+    3. Scrolled ``TextView`` showing the streamed stdout/stderr. A
+       monospaced font makes pacman's progress bars readable.
+    4. Button row: **Cancel** while running, becomes **Close** on
+       completion.
+
+    The dialog is created before the process starts; the runner then
+    calls :meth:`append_line` / :meth:`set_stage` on the UI thread (via
+    ``GLib.idle_add``) and finally :meth:`finish`.
+    """
+
+    def __init__(self, plan: "package_manager.InstallPlan") -> None:
+        super().__init__()
+        self.set_title(f"Installing {plan.package}")
+        self.set_content_width(640)
+        self.set_content_height(460)
+        # Refuse to close while the child is running — the user must
+        # either Cancel (which kills the child) or wait for completion.
+        self.set_can_close(False)
+
+        self._cancel_cb: Callable[[], None] | None = None
+        self._finished = False
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12,
+                       margin_top=18, margin_bottom=18,
+                       margin_start=18, margin_end=18)
+        self.set_child(outer)
+
+        header = Gtk.Label(
+            label=f"Installing <b>{GLib.markup_escape_text(plan.package)}</b> "
+                  f"on {GLib.markup_escape_text(plan.display_name)}",
+            use_markup=True, xalign=0.0,
+        )
+        header.add_css_class("heading")
+        outer.append(header)
+
+        self._stage_label = Gtk.Label(label="Waiting for password…", xalign=0.0)
+        self._stage_label.add_css_class("dim-label")
+        outer.append(self._stage_label)
+
+        self._progress = Gtk.ProgressBar()
+        outer.append(self._progress)
+        # We don't know real progress (pacman doesn't emit percentages
+        # reliably), so we pulse. GLib.timeout_add returns a tag so we
+        # can stop it later.
+        self._pulse_tag: int | None = GLib.timeout_add(120, self._pulse)
+
+        # Log view.
+        self._buffer = Gtk.TextBuffer()
+        self._textview = Gtk.TextView(buffer=self._buffer)
+        self._textview.set_editable(False)
+        self._textview.set_cursor_visible(False)
+        self._textview.set_monospace(True)
+        self._textview.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        scroll = Gtk.ScrolledWindow(vexpand=True, hexpand=True,
+                                    hscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
+                                    vscrollbar_policy=Gtk.PolicyType.AUTOMATIC)
+        scroll.set_child(self._textview)
+        scroll.add_css_class("card")
+        outer.append(scroll)
+
+        # Button row.
+        btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8,
+                         halign=Gtk.Align.END)
+        outer.append(btn_row)
+
+        self._button = Gtk.Button(label="Cancel")
+        self._button.connect("clicked", self._on_button_clicked)
+        btn_row.append(self._button)
+
+    # ── public API used by the caller ──
+    def bind_cancel(self, cancel_cb: Callable[[], None]) -> None:
+        """Register the callback invoked when the user clicks Cancel."""
+        self._cancel_cb = cancel_cb
+
+    def append_line(self, text: str) -> bool:
+        """Append *text* to the log. Called on UI thread via idle_add."""
+        it = self._buffer.get_end_iter()
+        if self._buffer.get_char_count() > 0:
+            self._buffer.insert(it, "\n")
+            it = self._buffer.get_end_iter()
+        self._buffer.insert(it, text)
+        # Auto-scroll to bottom.
+        mark = self._buffer.create_mark(None, self._buffer.get_end_iter(), False)
+        self._textview.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+        self._buffer.delete_mark(mark)
+        return False  # don't reschedule
+
+    def set_stage(self, text: str) -> bool:
+        self._stage_label.set_label(text)
+        return False
+
+    def finish(self, *, ok: bool, message: str) -> None:
+        """Mark the install as finished; swap Cancel → Close."""
+        self._finished = True
+        self.set_can_close(True)
+
+        # Stop pulsing.
+        if self._pulse_tag is not None:
+            GLib.source_remove(self._pulse_tag)
+            self._pulse_tag = None
+
+        if ok:
+            self._progress.set_fraction(1.0)
+            self._stage_label.set_label(message)
+            self._stage_label.remove_css_class("dim-label")
+            self._stage_label.add_css_class("success")
+        else:
+            self._progress.set_visible(False)
+            self._stage_label.set_label(message)
+            self._stage_label.remove_css_class("dim-label")
+            self._stage_label.add_css_class("error")
+
+        self._button.set_label("Close")
+
+    # ── internals ──
+    def _pulse(self) -> bool:
+        self._progress.pulse()
+        return True  # keep the timeout
+
+    def _on_button_clicked(self, _btn: Gtk.Button) -> None:
+        if self._finished:
+            self.force_close()
+            return
+        # Still running — kill the child.
+        self._stage_label.set_label("Cancelling…")
+        self._button.set_sensitive(False)
+        if self._cancel_cb is not None:
+            try:
+                self._cancel_cb()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("cancel callback raised: %s", exc)
+
+
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application):
         super().__init__(application=app)
@@ -1000,11 +1152,13 @@ class MainWindow(Adw.ApplicationWindow):
                 row.handler_unblock(handler_id)
 
     def _on_wrapper_toggled(self, row: Adw.SwitchRow, _pspec, wrapper: str) -> None:
-        """User flipped a wrapper switch — rewrite LaunchOptions accordingly.
+        """User flipped a wrapper switch — install if needed, then rewrite.
 
         Reuses the same close-Steam-first UX as ``_on_set_launch_options``.
-        On any failure we roll the visual switch back to whatever's actually
-        on disk.
+        If the wrapper isn't installed and the user was turning it ON, we
+        offer to install it via the distro's package manager first, then
+        continue with the toggle. On any failure we roll the visual switch
+        back to whatever's actually on disk.
         """
         enable = row.get_active()
 
@@ -1017,12 +1171,20 @@ class MainWindow(Adw.ApplicationWindow):
             self._refresh_launch_options()
             return
 
-        # Not installed? Show a helpful hint and roll back the switch.
+        # Not installed?
         if not launch_wrappers.is_installed(wrapper):
-            self._show_install_hint(wrapper)
-            self._refresh_launch_options()
+            if not enable:
+                # Turning off something that isn't installed — nothing to do.
+                self._refresh_launch_options()
+                return
+            # Offer to install, then continue toggling on success.
+            self._offer_install_then_toggle(wrapper)
             return
 
+        self._apply_wrapper_toggle(wrapper, enable=enable)
+
+    def _apply_wrapper_toggle(self, wrapper: str, *, enable: bool) -> None:
+        """Write the wrapper into (or out of) Steam's LaunchOptions."""
         # Pick the correct config + rewrite the string.
         status = steam_config.check_status(appid=self._target_appid())
         if status.config is None:
@@ -1123,9 +1285,124 @@ class MainWindow(Adw.ApplicationWindow):
         dlg.connect("response", on_response)
         dlg.present(self)
 
-    def _show_install_hint(self, wrapper: str) -> None:
+    # ── Auto-install for GameMode / MangoHud ──
+    def _offer_install_then_toggle(self, wrapper: str) -> None:
+        """Ask for confirmation, then run the distro install with progress.
+
+        On success, continue with turning the wrapper ON. On any failure
+        or cancellation, refresh the row so the switch snaps back.
+        """
+        # Build a plan up-front so we can show a truthful confirmation
+        # (which distro, which package, which command) — and bail early
+        # with a clean error if we can't help this user.
+        try:
+            plan = package_manager.plan_install(wrapper)
+        except (RuntimeError, ValueError) as exc:
+            self._show_manual_install_hint(wrapper, str(exc))
+            self._refresh_launch_options()
+            return
+
+        # Friendly confirmation dialog before we prompt for the sudo
+        # password. This is the ONLY place we describe exactly what
+        # we're about to do.
+        prefetch_note = ""
+        if plan.prefetch is not None:
+            prefetch_note = (
+                f"\n\nThis will first refresh the package index, then install "
+                f"the package."
+            )
+
+        dlg = Adw.AlertDialog(
+            heading=f"Install {wrapper}?",
+            body=(
+                f"{wrapper} isn't installed on your system yet.\n\n"
+                f"About to run on {plan.display_name}:\n"
+                f"    {plan.human_command}{prefetch_note}\n\n"
+                f"You'll be prompted for your password."
+            ),
+            close_response="cancel",
+        )
+        dlg.add_response("cancel", "Cancel")
+        dlg.add_response("install", f"Install {plan.package}")
+        dlg.set_response_appearance("install", Adw.ResponseAppearance.SUGGESTED)
+        dlg.set_default_response("install")
+
+        def on_response(_dlg, resp):
+            if resp != "install":
+                # User bailed — flip the switch back.
+                self._refresh_launch_options()
+                return
+            self._run_install_with_progress(plan, wrapper)
+
+        dlg.connect("response", on_response)
+        dlg.present(self)
+
+    def _run_install_with_progress(
+        self,
+        plan: "package_manager.InstallPlan",
+        wrapper: str,
+    ) -> None:
+        """Open a progress dialog and run the install in a worker thread."""
+        dialog = _InstallProgressDialog(plan)
+        dialog.present(self)
+
+        # Callbacks the worker thread hands to InstallProcess. We MUST
+        # marshal every UI mutation back to the main thread via idle_add.
+        def on_line(text: str) -> None:
+            GLib.idle_add(dialog.append_line, text)
+
+        def on_stage(text: str) -> None:
+            GLib.idle_add(dialog.set_stage, text)
+
+        proc = package_manager.InstallProcess(plan, on_line=on_line, on_stage=on_stage)
+        dialog.bind_cancel(proc.cancel)
+
+        def worker():
+            return proc.run()
+
+        def done(result, error):
+            if error is not None:
+                dialog.finish(ok=False, message=f"Unexpected error: {error}")
+                self._refresh_launch_options()
+                return
+
+            if result.cancelled:
+                dialog.finish(ok=False, message="Cancelled.")
+                self._refresh_launch_options()
+                return
+
+            if not result.ok:
+                dialog.finish(ok=False, message=result.error_message)
+                self._refresh_launch_options()
+                return
+
+            # Success — but shutil.which caches nothing, so a fresh lookup
+            # picks up the just-installed binary. Guard against the edge
+            # case where the package installed the binary somewhere not on
+            # our PATH (very rare, but ``mangohud`` on some multilib setups
+            # can be tricky).
+            if not launch_wrappers.is_installed(wrapper):
+                dialog.finish(
+                    ok=False,
+                    message=(
+                        f"Package installed but {wrapper} still isn't on "
+                        f"PATH. Open a new terminal and check `which {wrapper}`."
+                    ),
+                )
+                self._refresh_launch_options()
+                return
+
+            dialog.finish(ok=True, message=f"{wrapper} installed successfully.")
+            self._toast(f"{wrapper} installed. Enabling it now…")
+            # Now do what the user actually asked for: turn the wrapper on.
+            self._apply_wrapper_toggle(wrapper, enable=True)
+
+        run_in_thread(worker, on_done=done)
+
+    def _show_manual_install_hint(self, wrapper: str, reason: str) -> None:
+        """Fallback for unsupported distros / missing pkexec."""
         hints = launch_wrappers.INSTALL_HINTS.get(wrapper, {})
-        body_lines = [f"{wrapper} isn't installed on your system.", "", "Install it with your distro's package manager:"]
+        body_lines = [reason, "", "Install it manually with your distro's package manager:"]
         for label, cmd in (
             ("Arch / CachyOS / Manjaro", hints.get("arch")),
             ("Fedora", hints.get("fedora")),
@@ -1137,7 +1414,7 @@ class MainWindow(Adw.ApplicationWindow):
                 body_lines.append(f"• {label}:  {cmd}")
 
         dlg = Adw.AlertDialog(
-            heading=f"{wrapper} not installed",
+            heading=f"Can't install {wrapper} automatically",
             body="\n".join(body_lines),
         )
         dlg.add_response("ok", "OK")
