@@ -12,7 +12,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
-from . import __version__, config, installer, launcher, opener, paths, state, steam_config
+from . import __version__, config, installer, launch_wrappers, launcher, opener, paths, state, steam_config
 from .logger import configure as configure_logging
 from .settings import Settings
 
@@ -265,7 +265,10 @@ class PreferencesDialog(Adw.PreferencesDialog):
             description=(
                 "For 99% of users the defaults are correct. Only touch these "
                 "if you added BO3 as a Non-Steam game or want a custom "
-                "launch string."
+                "launch string. Note: while a custom launch string is set, "
+                "the Performance-mode and Performance-monitoring switches on "
+                "the main window are disabled because we can no longer safely "
+                "rewrite the string for you."
             ),
         )
         page.add(g_launch)
@@ -612,6 +615,30 @@ class MainWindow(Adw.ApplicationWindow):
         self._launchopts_row.add_suffix(self._launchopts_btn)
         actions_group.add(self._launchopts_row)
 
+        # GameMode toggle — wraps BO3 in gamemoderun via LaunchOptions.
+        self._gamemode_row = Adw.SwitchRow(
+            title="Performance mode (GameMode)",
+            subtitle="Checking…",
+        )
+        # Guard so programmatic ``set_active`` during refresh doesn't fire
+        # the user-toggle handler.
+        self._gamemode_row_signal_blocked = False
+        self._gamemode_handler_id = self._gamemode_row.connect(
+            "notify::active", self._on_wrapper_toggled, "gamemoderun"
+        )
+        actions_group.add(self._gamemode_row)
+
+        # MangoHud toggle — wraps BO3 in mangohud via LaunchOptions.
+        self._mangohud_row = Adw.SwitchRow(
+            title="Performance monitoring (MangoHud)",
+            subtitle="Checking…",
+        )
+        self._mangohud_row_signal_blocked = False
+        self._mangohud_handler_id = self._mangohud_row.connect(
+            "notify::active", self._on_wrapper_toggled, "mangohud"
+        )
+        actions_group.add(self._mangohud_row)
+
         # Big Play button, centred
         self._play_btn = Gtk.Button(label="▶  Launch BO3",
                                     css_classes=["bo3-play"])
@@ -843,11 +870,26 @@ class MainWindow(Adw.ApplicationWindow):
         return False
 
     # ── Steam launch options ──
-    def _target_launch_options(self) -> str:
-        """Return the string the user wants written — either the pref override
-        or the safe default."""
-        return (self._settings.launch_options_override
-                or steam_config.BO3_LAUNCH_OPTIONS)
+    def _target_launch_options(self, *, preserve_wrappers_from: str = "") -> str:
+        """Return the string the user wants written.
+
+        If a custom override is set in Preferences it wins verbatim.
+        Otherwise we start from the safe default and — if
+        *preserve_wrappers_from* is a real Steam value — carry over any
+        known wrappers (``gamemoderun`` / ``mangohud``) the user already
+        had enabled, so the “Set automatically” button never silently
+        strips them.
+        """
+        if self._settings.launch_options_override:
+            return self._settings.launch_options_override
+
+        result = steam_config.BO3_LAUNCH_OPTIONS
+        if preserve_wrappers_from:
+            for wrapper in launch_wrappers.KNOWN_WRAPPERS:
+                st = launch_wrappers.status_for(preserve_wrappers_from, wrapper)
+                if st.enabled and st.installed:
+                    result = launch_wrappers.toggle_wrapper(result, wrapper, enable=True)
+        return result
 
     def _target_appid(self) -> str:
         """AppID whose LaunchOptions we set — override for Non-Steam BO3."""
@@ -856,7 +898,6 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _refresh_launch_options(self):
         """Poll ``localconfig.vdf`` in a worker thread and update the row."""
-        target = self._target_launch_options()
         appid = self._target_appid()
 
         # Reflect the active AppID in the row title so an override is obvious.
@@ -868,7 +909,15 @@ class MainWindow(Adw.ApplicationWindow):
             )
 
         def worker():
-            return steam_config.check_status(target=target, appid=appid)
+            # Fetch the raw status first, then decide what "OK" means
+            # based on whichever wrappers are currently enabled.
+            status = steam_config.check_status(appid=appid)
+            expected = self._target_launch_options(
+                preserve_wrappers_from=status.current or ""
+            )
+            # Re-tag matches_target against our wrapper-aware expected value.
+            status.matches_target = (status.current == expected)
+            return status
 
         def done(status, error):
             if error is not None:
@@ -908,7 +957,191 @@ class MainWindow(Adw.ApplicationWindow):
                 self._launchopts_btn.add_css_class("suggested-action")
                 self._launchopts_btn.set_sensitive(True)
 
+            # Sync the wrapper switches to what's actually in the config.
+            self._sync_wrapper_rows(status.current or "")
+
         run_in_thread(worker, on_done=done)
+
+    # ── Wrapper switches (GameMode / MangoHud) ──
+    def _sync_wrapper_rows(self, current_launch_options: str) -> None:
+        """Reflect the on-disk LaunchOptions state in the two switch rows.
+
+        Never triggers the user-toggle handler — we set the switch value
+        under a signal-block guard, then update the subtitle text.
+        """
+        overridden = bool(self._settings.launch_options_override)
+        for wrapper, row, handler_id, human in (
+            ("gamemoderun", self._gamemode_row, self._gamemode_handler_id, "GameMode"),
+            ("mangohud", self._mangohud_row, self._mangohud_handler_id, "MangoHud"),
+        ):
+            st = launch_wrappers.status_for(current_launch_options, wrapper)
+
+            # Compose subtitle.
+            if not st.installed:
+                subtitle = f"{wrapper} not installed — install it first"
+                row.set_sensitive(False)
+            elif overridden:
+                subtitle = (
+                    "Disabled while a custom launch string is set in Preferences."
+                )
+                row.set_sensitive(False)
+            else:
+                subtitle = f"On — wraps BO3 in {wrapper}" if st.enabled \
+                    else f"Off — add {wrapper} wrapper on next Set"
+                row.set_sensitive(True)
+
+            row.set_subtitle(subtitle)
+
+            # Update the switch without firing our own toggle handler.
+            row.handler_block(handler_id)
+            try:
+                row.set_active(st.enabled)
+            finally:
+                row.handler_unblock(handler_id)
+
+    def _on_wrapper_toggled(self, row: Adw.SwitchRow, _pspec, wrapper: str) -> None:
+        """User flipped a wrapper switch — rewrite LaunchOptions accordingly.
+
+        Reuses the same close-Steam-first UX as ``_on_set_launch_options``.
+        On any failure we roll the visual switch back to whatever's actually
+        on disk.
+        """
+        enable = row.get_active()
+
+        # Refuse when the user has a custom launch string in Preferences —
+        # touching it via a toggle would be confusing.
+        if self._settings.launch_options_override:
+            self._toast(
+                "Custom launch string is active in Preferences — toggles disabled."
+            )
+            self._refresh_launch_options()
+            return
+
+        # Not installed? Show a helpful hint and roll back the switch.
+        if not launch_wrappers.is_installed(wrapper):
+            self._show_install_hint(wrapper)
+            self._refresh_launch_options()
+            return
+
+        # Pick the correct config + rewrite the string.
+        status = steam_config.check_status(appid=self._target_appid())
+        if status.config is None:
+            self._toast("No Steam profile found. Launch Steam once first.")
+            self._refresh_launch_options()
+            return
+
+        base = status.current or self._target_launch_options()
+        new_value = launch_wrappers.toggle_wrapper(base, wrapper, enable=enable)
+
+        # If nothing actually changed, do nothing (avoids re-writing the file).
+        if new_value == (status.current or ""):
+            return
+
+        if steam_config.is_steam_running():
+            self._prompt_close_steam_then_write(status.config, new_value, wrapper, enable)
+            return
+
+        self._write_launch_options(status.config, new_value, wrapper, enable)
+
+    def _write_launch_options(
+        self,
+        cfg: "steam_config.LocalConfig",
+        new_value: str,
+        wrapper: str,
+        enabled: bool,
+    ) -> None:
+        """Write *new_value* to localconfig.vdf; refresh UI on completion."""
+        appid = self._target_appid()
+
+        def worker():
+            steam_config.set_launch_options(cfg, new_value, appid=appid)
+            return True
+
+        def done(_res, error):
+            if error is not None:
+                show_error_dialog(self, f"Could not toggle {wrapper}", error)
+                self._refresh_launch_options()
+                return
+            verb = "enabled" if enabled else "disabled"
+            self._toast(f"{wrapper} {verb} — active on next Steam start.")
+            self._refresh_launch_options()
+
+        run_in_thread(worker, on_done=done)
+
+    def _prompt_close_steam_then_write(
+        self,
+        cfg: "steam_config.LocalConfig",
+        new_value: str,
+        wrapper: str,
+        enabled: bool,
+    ) -> None:
+        dlg = Adw.AlertDialog(
+            heading="Steam is running",
+            body=(
+                f"Toggling {wrapper} needs to write to Steam's config, and "
+                "Steam overwrites that file when it exits. Close Steam now "
+                "and apply the change?"
+            ),
+            close_response="cancel",
+        )
+        dlg.add_response("cancel", "Cancel")
+        dlg.add_response("close-steam", "Close Steam & apply")
+        dlg.set_response_appearance("close-steam", Adw.ResponseAppearance.SUGGESTED)
+        dlg.set_default_response("close-steam")
+
+        appid = self._target_appid()
+
+        def on_response(_dlg, resp):
+            if resp != "close-steam":
+                # User cancelled — put the switch back where it was.
+                self._refresh_launch_options()
+                return
+
+            def worker():
+                if not steam_config.request_steam_shutdown():
+                    raise RuntimeError(
+                        "Could not send 'steam -shutdown'. Please close Steam manually."
+                    )
+                if not steam_config.wait_for_steam_to_exit(timeout=25.0):
+                    raise TimeoutError(
+                        "Steam did not exit within 25 s. Please close it manually and retry."
+                    )
+                steam_config.set_launch_options(cfg, new_value, appid=appid)
+                return True
+
+            def done(_res, error):
+                if error is not None:
+                    show_error_dialog(self, f"Could not toggle {wrapper}", error)
+                    self._refresh_launch_options()
+                    return
+                verb = "enabled" if enabled else "disabled"
+                self._toast(f"{wrapper} {verb} — you can start Steam again.")
+                self._refresh_launch_options()
+
+            run_in_thread(worker, on_done=done)
+
+        dlg.connect("response", on_response)
+        dlg.present(self)
+
+    def _show_install_hint(self, wrapper: str) -> None:
+        hints = launch_wrappers.INSTALL_HINTS.get(wrapper, {})
+        body_lines = [f"{wrapper} isn't installed on your system.", "", "Install it with your distro's package manager:"]
+        for label, cmd in (
+            ("Arch / CachyOS / Manjaro", hints.get("arch")),
+            ("Fedora", hints.get("fedora")),
+            ("Debian / Ubuntu / Mint", hints.get("debian")),
+            ("openSUSE", hints.get("opensuse")),
+            ("Flatpak Steam", hints.get("flatpak")),
+        ):
+            if cmd:
+                body_lines.append(f"• {label}:  {cmd}")
+
+        dlg = Adw.AlertDialog(
+            heading=f"{wrapper} not installed",
+            body="\n".join(body_lines),
+        )
+        dlg.add_response("ok", "OK")
+        dlg.present(self)
 
     def _on_set_launch_options(self, _btn):
         """Write ``WINEDLLOVERRIDES="dsound=n,b" %command%`` into localconfig.vdf.
@@ -916,19 +1149,19 @@ class MainWindow(Adw.ApplicationWindow):
         If Steam is running, ask the user (via a dialog) whether we may
         shut it down; otherwise refuse.
         """
-        status = steam_config.check_status()
+        status = steam_config.check_status(appid=self._target_appid())
         if status.config is None:
             self._toast("No Steam profile found. Launch Steam once first.")
             self._refresh_launch_options()
             return
 
         if steam_config.is_steam_running():
-            self._prompt_close_steam_then_apply(status.config)
+            self._prompt_close_steam_then_apply(status.config, status.current or "")
             return
 
-        self._do_apply_launch_options(status.config)
+        self._do_apply_launch_options(status.config, status.current or "")
 
-    def _prompt_close_steam_then_apply(self, cfg: steam_config.LocalConfig) -> None:
+    def _prompt_close_steam_then_apply(self, cfg: steam_config.LocalConfig, current: str = "") -> None:
         dlg = Adw.AlertDialog(
             heading="Steam is running",
             body=(
@@ -949,7 +1182,7 @@ class MainWindow(Adw.ApplicationWindow):
             self._launchopts_btn.set_sensitive(False)
             self._launchopts_row.set_subtitle("Closing Steam…")
 
-            target = self._target_launch_options()
+            target = self._target_launch_options(preserve_wrappers_from=current)
             appid = self._target_appid()
 
             def worker():
@@ -977,11 +1210,11 @@ class MainWindow(Adw.ApplicationWindow):
         dlg.connect("response", on_response)
         dlg.present(self)
 
-    def _do_apply_launch_options(self, cfg: steam_config.LocalConfig) -> None:
+    def _do_apply_launch_options(self, cfg: steam_config.LocalConfig, current: str = "") -> None:
         """Apply the launch-options write (Steam already confirmed not running)."""
         self._launchopts_btn.set_sensitive(False)
         self._launchopts_row.set_subtitle("Writing localconfig.vdf…")
-        target = self._target_launch_options()
+        target = self._target_launch_options(preserve_wrappers_from=current)
         appid = self._target_appid()
 
         def worker():

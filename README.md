@@ -135,6 +135,32 @@ If you'd rather do it by hand, the target launch string is
 The toggle at the top disables the patch (renames the DLLs to `*.disabled`)
 whenever you want vanilla BO3 for a session, without deleting anything.
 
+**Performance mode & Performance monitoring:**
+
+Below the launch-options row you'll see two switches:
+
+- **Performance mode (GameMode)** wraps BO3 in `gamemoderun`. Feral
+  GameMode temporarily bumps the CPU governor to `performance`, pins the
+  CPU frequency, and gives the game realtime-ish scheduling priority. On
+  laptops and CPUs with aggressive power-saving this is often the single
+  biggest fix for stutter and low 1% lows in menus and matches. Needs the
+  `gamemode` package (Arch/CachyOS: `sudo pacman -S gamemode`).
+- **Performance monitoring (MangoHud)** wraps BO3 in `mangohud`. This
+  draws an FPS/CPU/GPU overlay on top of the game so you can see whether
+  a stutter is caused by GPU load, CPU load, or something else
+  entirely. Needs the `mangohud` package (Arch/CachyOS:
+  `sudo pacman -S mangohud`).
+
+Both switches rewrite Steam's launch string for you — they add
+`gamemoderun` and/or `mangohud` in front of `%command%` in the correct
+order (GameMode outside, MangoHud inside, exactly what ProtonDB and the
+MangoHud docs recommend). If Steam is running when you flip a switch,
+the app offers to close it cleanly first, otherwise Steam would
+overwrite the change when it exits. The switches are disabled if the
+respective tool isn't installed, and also if you've set a custom launch
+string in Preferences (because in that case the app can no longer safely
+rewrite it for you).
+
 ## Troubleshooting
 
 If the installer or the app misbehaves, start here.
@@ -305,6 +331,33 @@ Wer es lieber selbst macht: der Zielstring ist
 
 Der Schalter oben deaktiviert den Patch (benennt die DLLs zu `*.disabled` um)
 wenn du mal Vanilla-BO3 haben willst — ohne etwas zu löschen.
+
+**Performance mode & Performance monitoring:**
+
+Unter der Launch-Options-Zeile findest du zwei Schalter:
+
+- **Performance mode (GameMode)** wickelt BO3 in `gamemoderun` ein. Feral
+  GameMode setzt den CPU-Governor temporär auf `performance`, pinnt die
+  CPU-Frequenz nach oben und gibt dem Spiel Echtzeit-nahe
+  Scheduling-Priorität. Auf Laptops und CPUs mit aggressivem
+  Power-Saving ist das oft der wichtigste Fix gegen Stotterer und
+  eingebrochene 1%-Lows in Menüs und Runden. Benötigt das
+  `gamemode`-Paket (Arch/CachyOS: `sudo pacman -S gamemode`).
+- **Performance monitoring (MangoHud)** wickelt BO3 in `mangohud` ein.
+  Damit legt sich ein Overlay mit FPS-, CPU- und GPU-Werten übers
+  Spiel, sodass du siehst ob ein Ruckler von der GPU-Last, der CPU-Last
+  oder was ganz anderem kommt. Benötigt das `mangohud`-Paket
+  (Arch/CachyOS: `sudo pacman -S mangohud`).
+
+Beide Schalter schreiben deinen Steam-Startstring für dich um — sie
+setzen `gamemoderun` und/oder `mangohud` in der korrekten Reihenfolge
+vor `%command%` (GameMode außen, MangoHud innen, wie ProtonDB und die
+MangoHud-Doku es empfehlen). Läuft Steam gerade beim Umlegen, bietet
+die App an, Steam vorher sauber zu beenden — sonst überschreibt Steam
+die Änderung beim nächsten Beenden. Ist das jeweilige Tool nicht
+installiert, oder hast du in den Einstellungen einen eigenen
+Launch-String hinterlegt, sind die Schalter ausgegraut (im Custom-Fall,
+weil die App den String dann nicht mehr sicher umschreiben kann).
 
 ### Fehlersuche
 

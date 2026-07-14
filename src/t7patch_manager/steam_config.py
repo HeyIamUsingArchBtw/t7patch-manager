@@ -284,7 +284,9 @@ def set_launch_options(
 
 
 # Convenience for the UI: "what's the state right now?"
-@dataclass(frozen=True)
+# Not frozen — the UI re-evaluates ``matches_target`` against a
+# wrapper-aware expected value (see ui._refresh_launch_options).
+@dataclass
 class LaunchOptionsStatus:
     config: LocalConfig | None
     current: str | None       # current value (or None)
