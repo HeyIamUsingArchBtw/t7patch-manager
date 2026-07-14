@@ -1,6 +1,6 @@
 # Maintainer: HeyIamUsingArchBtw
 pkgname=t7patch-manager
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="GTK4 app to install, launch, toggle and configure T7Patch v3 for BO3 on Linux"
 arch=('any')

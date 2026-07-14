@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import traceback
 from pathlib import Path
 from typing import Callable
 
@@ -25,27 +26,52 @@ def run_in_thread(fn: Callable[..., None], *args, on_done: Callable[..., None] |
             result = fn(*args)
         except Exception as exc:  # noqa: BLE001
             error = exc
+            traceback.print_exc()
         if on_done:
             GLib.idle_add(on_done, result, error)
     threading.Thread(target=target, daemon=True).start()
 
 
 # ── config editor dialog ────────────────────────────────────────────
-class ConfigDialog(Adw.PreferencesDialog):
-    def __init__(self, parent: Gtk.Window, conf_path: Path):
+class ConfigDialog(Adw.Dialog):
+    """Dialog with explicit Cancel / Save buttons for t7patch.conf."""
+
+    def __init__(self, parent: Gtk.Window, conf_path: Path,
+                 on_saved: Callable[[], None] | None = None):
         super().__init__()
         self.set_title("T7Patch Config")
+        self.set_content_width(460)
         self._path = conf_path
         self._cfg = config.read(conf_path)
+        self._on_saved = on_saved
 
-        page = Adw.PreferencesPage(title="Settings", icon_name="preferences-system-symbolic")
-        self.add(page)
+        toolbar = Adw.ToolbarView()
+        self.set_child(toolbar)
+
+        header = Adw.HeaderBar()
+        header.set_show_start_title_buttons(False)
+        header.set_show_end_title_buttons(False)
+
+        cancel_btn = Gtk.Button(label="Cancel")
+        cancel_btn.connect("clicked", lambda *_: self.close())
+        header.pack_start(cancel_btn)
+
+        save_btn = Gtk.Button(label="Save", css_classes=["suggested-action"])
+        save_btn.connect("clicked", self._on_save)
+        header.pack_end(save_btn)
+        self.set_default_widget(save_btn)
+
+        toolbar.add_top_bar(header)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12,
+                       margin_top=16, margin_bottom=16, margin_start=16, margin_end=16)
+        toolbar.set_content(body)
 
         grp = Adw.PreferencesGroup(
             title="In-game identity",
             description="These are shown to other players.",
         )
-        page.add(grp)
+        body.append(grp)
 
         self._name = Adw.EntryRow(title="Player name")
         self._name.set_text(self._cfg.playername)
@@ -62,15 +88,23 @@ class ConfigDialog(Adw.PreferencesDialog):
         self._friends.set_active(self._cfg.isfriendsonly)
         grp.add(self._friends)
 
-        # Save on close
-        self.connect("closed", self._on_closed)
+        # Enter in any text field saves
+        self._name.connect("entry-activated", self._on_save)
+        self._pw.connect("entry-activated", self._on_save)
+
         self.present(parent)
 
-    def _on_closed(self, *_):
+    def _on_save(self, *_):
         self._cfg.playername = self._name.get_text().strip() or "Unknown Soldier"
         self._cfg.networkpassword = self._pw.get_text()
         self._cfg.isfriendsonly = self._friends.get_active()
-        config.write(self._path, self._cfg)
+        try:
+            config.write(self._path, self._cfg)
+            if self._on_saved:
+                self._on_saved()
+        except Exception:  # noqa: BLE001
+            pass
+        self.close()
 
 
 # ── main window ─────────────────────────────────────────────────────
@@ -78,7 +112,7 @@ class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application):
         super().__init__(application=app)
         self.set_title("T7Patch Manager")
-        self.set_default_size(560, 520)
+        self.set_default_size(560, 560)
 
         self._bo3_dir: Path | None = paths.find_bo3_dir()
         self._status: state.PatchStatus | None = None
@@ -108,22 +142,23 @@ class MainWindow(Adw.ApplicationWindow):
                            margin_top=24, margin_bottom=24, margin_start=24, margin_end=24)
         self._toaster.set_child(content)
 
-        # Big status card
+        # Update banner
         self._banner = Adw.Banner()
         self._banner.set_revealed(False)
         content.append(self._banner)
 
+        # Status card
         status_group = Adw.PreferencesGroup()
         content.append(status_group)
 
         self._bo3_row = Adw.ActionRow(title="Black Ops III")
-        self._bo3_row.set_subtitle("(detecting…)")
+        self._bo3_row.set_subtitle("Detecting…")
         status_group.add(self._bo3_row)
 
         self._patch_row = Adw.ActionRow(title="T7Patch")
-        self._patch_row.set_subtitle("(detecting…)")
+        self._patch_row.set_subtitle("Detecting…")
         self._patch_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
-        self._patch_switch.connect("state-set", self._on_toggle)
+        self._patch_switch_handler = self._patch_switch.connect("state-set", self._on_toggle)
         self._patch_row.add_suffix(self._patch_switch)
         status_group.add(self._patch_row)
 
@@ -131,12 +166,13 @@ class MainWindow(Adw.ApplicationWindow):
         actions_group = Adw.PreferencesGroup(title="Actions")
         content.append(actions_group)
 
-        self._install_btn = Gtk.Button(label="Install T7Patch v3.03", css_classes=["suggested-action", "pill"])
+        self._install_btn = Gtk.Button(label="Install T7Patch",
+                                        css_classes=["suggested-action", "pill"])
         self._install_btn.connect("clicked", self._on_install)
-        install_row = Adw.ActionRow(title="Install / update T7Patch",
-                                     subtitle="Downloads the latest release from Scroptss/T7Patch")
-        install_row.add_suffix(self._install_btn)
-        actions_group.add(install_row)
+        self._install_row = Adw.ActionRow(title="T7Patch",
+                                           subtitle="Loading release info…")
+        self._install_row.add_suffix(self._install_btn)
+        actions_group.add(self._install_row)
 
         self._play_btn = Gtk.Button(label="Play", css_classes=["pill"])
         self._play_btn.connect("clicked", self._on_play)
@@ -172,9 +208,12 @@ class MainWindow(Adw.ApplicationWindow):
 
     # ── status handling ──
     def _refresh_status(self):
+        """Repaint every status-dependent widget based on current disk state."""
+        # No BO3 install at all
         if not self._bo3_dir:
             self._bo3_row.set_subtitle("Not found — install BO3 in Steam first.")
             self._patch_row.set_subtitle("BO3 not detected")
+            self._install_row.set_subtitle("BO3 must be installed first")
             self._install_btn.set_sensitive(False)
             self._play_btn.set_sensitive(False)
             self._config_btn.set_sensitive(False)
@@ -182,45 +221,124 @@ class MainWindow(Adw.ApplicationWindow):
             return
 
         self._bo3_row.set_subtitle(str(self._bo3_dir))
-        self._status = state.detect(self._bo3_dir)
+        try:
+            self._status = state.detect(self._bo3_dir)
+        except Exception as exc:  # noqa: BLE001
+            self._patch_row.set_subtitle(f"Error: {exc}")
+            traceback.print_exc()
+            return
 
-        match self._status.state:
-            case state.PatchState.NOT_INSTALLED:
+        st = self._status
+        # Show a friendly installed-version string (falls back to "unknown" if the
+        # marker file was not written — e.g. the patch was placed manually).
+        ver_txt = st.installed_version or "installed"
+
+        # Guard the switch handler so programmatic changes don't fire the toggle
+        self._patch_switch.handler_block(self._patch_switch_handler)
+        try:
+            if st.state is state.PatchState.NOT_INSTALLED:
                 self._patch_row.set_subtitle("Not installed")
                 self._patch_switch.set_sensitive(False)
                 self._patch_switch.set_active(False)
                 self._config_btn.set_sensitive(False)
                 self._play_btn.set_sensitive(True)
-            case state.PatchState.ENABLED:
-                v = self._status.installed_version or "?"
-                self._patch_row.set_subtitle(f"Installed & enabled  ·  {v}")
+            elif st.state is state.PatchState.ENABLED:
+                self._patch_row.set_subtitle(f"Enabled  ·  {ver_txt}")
                 self._patch_switch.set_sensitive(True)
                 self._patch_switch.set_active(True)
-                self._config_btn.set_sensitive(self._status.conf_exists)
+                self._config_btn.set_sensitive(st.conf_exists)
                 self._play_btn.set_sensitive(True)
-            case state.PatchState.DISABLED:
-                v = self._status.installed_version or "?"
-                self._patch_row.set_subtitle(f"Installed but disabled  ·  {v}")
+            elif st.state is state.PatchState.DISABLED:
+                self._patch_row.set_subtitle(f"Disabled  ·  {ver_txt}")
                 self._patch_switch.set_sensitive(True)
                 self._patch_switch.set_active(False)
-                self._config_btn.set_sensitive(self._status.conf_exists)
+                self._config_btn.set_sensitive(st.conf_exists)
                 self._play_btn.set_sensitive(True)
+        finally:
+            self._patch_switch.handler_unblock(self._patch_switch_handler)
+
+        # Install-action row + button label reflect current state
+        self._update_install_row()
+
+    def _update_install_row(self):
+        """Update the install-action row's subtitle + button label based on state + latest tag."""
+        st = self._status
+        latest = self._latest_tag  # may be None if the API call hasn't returned yet
+
+        if not st:
+            return
+
+        if st.state is state.PatchState.NOT_INSTALLED:
+            self._install_row.set_subtitle(
+                f"Not installed. Latest release: {latest}." if latest
+                else "Not installed."
+            )
+            self._install_btn.set_label(f"Install {latest}" if latest else "Install T7Patch")
+            self._install_btn.set_sensitive(True)
+            self._install_btn.set_css_classes(["suggested-action", "pill"])
+        else:
+            # Installed — either same version or possibly outdated
+            installed = st.installed_version
+            if latest and installed and installed != latest:
+                self._install_row.set_subtitle(
+                    f"Installed: {installed}  ·  Update available: {latest}"
+                )
+                self._install_btn.set_label(f"Update to {latest}")
+                self._install_btn.set_sensitive(True)
+                self._install_btn.set_css_classes(["suggested-action", "pill"])
+            elif latest and installed and installed == latest:
+                self._install_row.set_subtitle(f"Up to date  ·  {installed}")
+                self._install_btn.set_label("Reinstall")
+                self._install_btn.set_sensitive(True)
+                self._install_btn.set_css_classes(["pill"])
+            else:
+                # Installed but we couldn't determine the version (no marker file)
+                if latest:
+                    self._install_row.set_subtitle(
+                        f"Installed (version unknown). Latest release: {latest}."
+                    )
+                    self._install_btn.set_label(f"Reinstall {latest}")
+                else:
+                    self._install_row.set_subtitle("Installed.")
+                    self._install_btn.set_label("Reinstall")
+                self._install_btn.set_sensitive(True)
+                self._install_btn.set_css_classes(["pill"])
 
     # ── update check ──
     def _check_latest_async(self):
         def _done(result, error):
             if error or not result:
+                if self._status and self._status.state is state.PatchState.NOT_INSTALLED:
+                    self._install_row.set_subtitle("Not installed. (Update check failed)")
+                elif self._status:
+                    self._install_row.set_subtitle("Installed. (Update check failed)")
                 return
             self._latest_tag = result.tag
-            self._install_btn.set_label(f"Install T7Patch {result.tag}")
-            if self._status and self._status.installed_version \
-               and self._status.installed_version != result.tag:
+
+            # If the patch is installed but has no version marker, adopt the
+            # latest tag as the assumed version (best-effort — the user can
+            # always click Reinstall to make it authoritative).
+            if self._status and self._status.state is not state.PatchState.NOT_INSTALLED \
+               and not self._status.installed_version and self._bo3_dir:
+                try:
+                    state.write_version_marker(self._bo3_dir, result.tag)
+                    self._status = state.detect(self._bo3_dir)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            self._update_install_row()
+
+            # Update banner if we have a mismatch
+            installed = self._status.installed_version if self._status else None
+            if installed and installed != result.tag:
                 self._banner.set_title(
-                    f"Update available: {result.tag} (installed: {self._status.installed_version})"
+                    f"Update available: {result.tag} (installed: {installed})"
                 )
                 self._banner.set_button_label("Update now")
                 self._banner.connect("button-clicked", lambda *_: self._on_install(None))
                 self._banner.set_revealed(True)
+            else:
+                self._banner.set_revealed(False)
 
         run_in_thread(installer.fetch_latest_release, on_done=_done)
 
@@ -233,8 +351,9 @@ class MainWindow(Adw.ApplicationWindow):
             self._toast("T7Patch enabled" if val else "T7Patch disabled")
         except Exception as exc:  # noqa: BLE001
             self._toast(f"Toggle failed: {exc}")
-        self._refresh_status()
-        return False  # let GTK apply the new state
+        # Let GTK apply the new state, then refresh
+        GLib.idle_add(self._refresh_status)
+        return False
 
     def _on_play(self, _btn):
         try:
@@ -269,13 +388,14 @@ class MainWindow(Adw.ApplicationWindow):
 
         def _done(tag, error):
             self._downloading = False
-            progress.close()
             self._install_btn.set_sensitive(True)
+            progress.close()
             if error:
                 self._toast(f"Install failed: {error}")
             else:
                 self._toast(f"Installed T7Patch {tag}")
                 self._banner.set_revealed(False)
+                self._latest_tag = tag  # ensure UI reflects the new version immediately
             self._refresh_status()
 
         run_in_thread(do_install, on_done=_done)
@@ -283,7 +403,11 @@ class MainWindow(Adw.ApplicationWindow):
     def _open_config_dialog(self):
         if not self._bo3_dir:
             return
-        ConfigDialog(self, self._bo3_dir / "t7patch.conf")
+        ConfigDialog(
+            self,
+            self._bo3_dir / "t7patch.conf",
+            on_saved=lambda: self._toast("Config saved"),
+        )
 
     def _toast(self, msg: str, timeout: int = 4):
         t = Adw.Toast.new(msg)
