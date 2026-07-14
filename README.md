@@ -30,14 +30,25 @@ sudo pacman -S --needed python python-gobject gtk4 libadwaita
 
 ## Install
 
-### AUR (recommended on Arch/CachyOS/Manjaro)
+### One-shot installer (recommended, Arch-based distros)
+```fish
+git clone https://github.com/HeyIamUsingArchBtw/t7patch-manager
+cd t7patch-manager
+./install.sh
+```
+The installer handles everything: installs system dependencies via `pacman`,
+sets up `~/.local/bin` in your PATH (fish/bash/zsh), installs the app via
+`pipx`, registers the desktop entry, and offers to launch it. Run
+`./install.sh --uninstall` to reverse everything.
+
+### AUR (once published)
 ```fish
 paru -S t7patch-manager
 # or
 yay -S t7patch-manager
 ```
 
-### From source
+### Manual (from source)
 ```fish
 git clone https://github.com/HeyIamUsingArchBtw/t7patch-manager
 cd t7patch-manager
@@ -119,12 +130,23 @@ sudo pacman -S --needed python python-gobject gtk4 libadwaita
 
 ### Installation
 
-#### Über das AUR (empfohlen)
+#### Ein-Kommando-Installer (empfohlen, Arch-basierte Distros)
+```fish
+git clone https://github.com/HeyIamUsingArchBtw/t7patch-manager
+cd t7patch-manager
+./install.sh
+```
+Das Script macht alles: System-Pakete via `pacman` installieren, `~/.local/bin`
+in den PATH eintragen (fish/bash/zsh erkannt), App via `pipx` installieren,
+Desktop-Eintrag registrieren und optional direkt starten. Zum sauberen
+Entfernen: `./install.sh --uninstall`.
+
+#### Über das AUR (sobald verfügbar)
 ```fish
 paru -S t7patch-manager
 ```
 
-#### Aus dem Quellcode
+#### Manuell aus dem Quellcode
 ```fish
 git clone https://github.com/HeyIamUsingArchBtw/t7patch-manager
 cd t7patch-manager
