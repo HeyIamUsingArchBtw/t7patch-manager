@@ -12,7 +12,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
-from . import __version__, config, installer, launcher, opener, paths, state
+from . import __version__, config, installer, launcher, opener, paths, state, steam_config
 from .logger import configure as configure_logging
 from .settings import Settings
 
@@ -259,6 +259,28 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self._src_row.add_suffix(clear2)
         g2.add(self._src_row)
 
+        # ── Steam launch options override ──
+        g_launch = Adw.PreferencesGroup(
+            title="Steam launch options override",
+            description=(
+                "Leave empty to use the default "
+                '\'WINEDLLOVERRIDES="dsound=n,b" %command%\'. '
+                "Override only if you know what you're doing."
+            ),
+        )
+        page.add(g_launch)
+
+        self._launchopts_pref_row = Adw.EntryRow(title="Custom launch options")
+        if settings.launch_options_override:
+            self._launchopts_pref_row.set_text(settings.launch_options_override)
+        clear_lo = Gtk.Button(
+            icon_name="edit-clear-symbolic", tooltip_text="Clear",
+            valign=Gtk.Align.CENTER, css_classes=["flat"],
+        )
+        clear_lo.connect("clicked", lambda *_: self._launchopts_pref_row.set_text(""))
+        self._launchopts_pref_row.add_suffix(clear_lo)
+        g_launch.add(self._launchopts_pref_row)
+
         # ── Advanced (network) ──
         g3 = Adw.PreferencesGroup(
             title="Advanced",
@@ -328,6 +350,7 @@ class PreferencesDialog(Adw.PreferencesDialog):
     def _apply(self, _btn):
         self._s.bo3_dir_override = self._bo3_row.get_text().strip() or None
         self._s.patch_source_override = self._src_row.get_text().strip() or None
+        self._s.launch_options_override = self._launchopts_pref_row.get_text().strip() or None
         self._s.http_timeout = int(self._timeout_row.get_value())
         try:
             self._s.save()
@@ -494,6 +517,16 @@ class MainWindow(Adw.ApplicationWindow):
         cfg_row.add_suffix(self._config_btn)
         actions_group.add(cfg_row)
 
+        # Steam launch-options row — auto-set the WINEDLLOVERRIDES line.
+        self._launchopts_btn = Gtk.Button(label="Set automatically")
+        self._launchopts_btn.connect("clicked", self._on_set_launch_options)
+        self._launchopts_row = Adw.ActionRow(
+            title="Steam launch options",
+            subtitle="Checking…",
+        )
+        self._launchopts_row.add_suffix(self._launchopts_btn)
+        actions_group.add(self._launchopts_row)
+
         # Big Play button, centred
         self._play_btn = Gtk.Button(label="▶  Launch BO3",
                                     css_classes=["bo3-play"])
@@ -502,24 +535,11 @@ class MainWindow(Adw.ApplicationWindow):
         play_row.set_center_widget(self._play_btn)
         content.append(play_row)
 
-        # Footer hint — wrapped in a dark panel so it stays legible on top
-        # of the decorative background.
-        hint = Gtk.Label(
-            label=(
-                "Steam launch options must be set to\n"
-                "<tt>WINEDLLOVERRIDES=\"dsound=n,b\" %command%</tt>\n"
-                "Right-click BO3 in Steam → Properties → Launch options."
-            ),
-            use_markup=True, wrap=True,
-            justify=Gtk.Justification.CENTER,
-            css_classes=["bo3-hint"],
-        )
-        hint_panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                             css_classes=["bo3-hint-panel"])
-        hint_panel.append(hint)
-        content.append(hint_panel)
+        # No standalone footer hint anymore — the new launch-options row in
+        # the Actions section handles that job interactively.
 
         self._refresh_status()
+        self._refresh_launch_options()
         self._check_latest_async()
 
     # ── header / hero builders ──
@@ -737,6 +757,146 @@ class MainWindow(Adw.ApplicationWindow):
         GLib.idle_add(self._refresh_status)
         return False
 
+    # ── Steam launch options ──
+    def _target_launch_options(self) -> str:
+        """Return the string the user wants written — either the pref override
+        or the safe default."""
+        return (self._settings.launch_options_override
+                or steam_config.BO3_LAUNCH_OPTIONS)
+
+    def _refresh_launch_options(self):
+        """Poll ``localconfig.vdf`` in a worker thread and update the row."""
+        target = self._target_launch_options()
+
+        def worker():
+            return steam_config.check_status(target=target)
+
+        def done(status, error):
+            if error is not None:
+                log.warning("launch-options check failed: %s", error)
+                self._launchopts_row.set_subtitle(
+                    "Could not read Steam config — set it manually in Steam."
+                )
+                self._launchopts_btn.set_sensitive(False)
+                return
+
+            if status.config is None:
+                self._launchopts_row.set_subtitle(
+                    "No Steam profile found — launch Steam once, then re-check."
+                )
+                self._launchopts_btn.set_label("Retry")
+                self._launchopts_btn.set_sensitive(True)
+                self._launchopts_btn.remove_css_class("suggested-action")
+                return
+
+            profile = status.config.steam_uid
+            if status.matches_target:
+                self._launchopts_row.set_subtitle(f"OK · already set for profile {profile}")
+                self._launchopts_btn.set_label("Re-apply")
+                self._launchopts_btn.remove_css_class("suggested-action")
+                self._launchopts_btn.set_sensitive(True)
+            elif status.current:
+                short = status.current if len(status.current) < 60 else status.current[:57] + "…"
+                self._launchopts_row.set_subtitle(
+                    f"Different value set for {profile}: {short}"
+                )
+                self._launchopts_btn.set_label("Overwrite")
+                self._launchopts_btn.add_css_class("suggested-action")
+                self._launchopts_btn.set_sensitive(True)
+            else:
+                self._launchopts_row.set_subtitle(f"Not set for profile {profile}")
+                self._launchopts_btn.set_label("Set automatically")
+                self._launchopts_btn.add_css_class("suggested-action")
+                self._launchopts_btn.set_sensitive(True)
+
+        run_in_thread(worker, on_done=done)
+
+    def _on_set_launch_options(self, _btn):
+        """Write ``WINEDLLOVERRIDES="dsound=n,b" %command%`` into localconfig.vdf.
+
+        If Steam is running, ask the user (via a dialog) whether we may
+        shut it down; otherwise refuse.
+        """
+        status = steam_config.check_status()
+        if status.config is None:
+            self._toast("No Steam profile found. Launch Steam once first.")
+            self._refresh_launch_options()
+            return
+
+        if steam_config.is_steam_running():
+            self._prompt_close_steam_then_apply(status.config)
+            return
+
+        self._do_apply_launch_options(status.config)
+
+    def _prompt_close_steam_then_apply(self, cfg: steam_config.LocalConfig) -> None:
+        dlg = Adw.AlertDialog(
+            heading="Steam is running",
+            body=(
+                "Steam overwrites its config file when it exits, so any changes we "
+                "make right now would be lost.\n\n"
+                "Close Steam now and apply the launch options?"
+            ),
+            close_response="cancel",
+        )
+        dlg.add_response("cancel", "Cancel")
+        dlg.add_response("close-steam", "Close Steam & apply")
+        dlg.set_response_appearance("close-steam", Adw.ResponseAppearance.SUGGESTED)
+        dlg.set_default_response("close-steam")
+
+        def on_response(_dlg, resp):
+            if resp != "close-steam":
+                return
+            self._launchopts_btn.set_sensitive(False)
+            self._launchopts_row.set_subtitle("Closing Steam…")
+
+            target = self._target_launch_options()
+
+            def worker():
+                if not steam_config.request_steam_shutdown():
+                    raise RuntimeError(
+                        "Could not send 'steam -shutdown'. Please close Steam manually."
+                    )
+                if not steam_config.wait_for_steam_to_exit(timeout=25.0):
+                    raise TimeoutError(
+                        "Steam did not exit within 25 s. Please close it manually and retry."
+                    )
+                steam_config.set_launch_options(cfg, target)
+                return True
+
+            def done(_res, error):
+                if error is not None:
+                    show_error_dialog(self, "Could not set launch options", error)
+                    self._refresh_launch_options()
+                    return
+                self._toast("Launch options applied — you can start Steam again.")
+                self._refresh_launch_options()
+
+            run_in_thread(worker, on_done=done)
+
+        dlg.connect("response", on_response)
+        dlg.present(self)
+
+    def _do_apply_launch_options(self, cfg: steam_config.LocalConfig) -> None:
+        """Apply the launch-options write (Steam already confirmed not running)."""
+        self._launchopts_btn.set_sensitive(False)
+        self._launchopts_row.set_subtitle("Writing localconfig.vdf…")
+        target = self._target_launch_options()
+
+        def worker():
+            steam_config.set_launch_options(cfg, target)
+            return True
+
+        def done(_res, error):
+            if error is not None:
+                show_error_dialog(self, "Could not set launch options", error)
+                self._refresh_launch_options()
+                return
+            self._toast("Launch options applied.")
+            self._refresh_launch_options()
+
+        run_in_thread(worker, on_done=done)
+
     def _on_play(self, _btn):
         try:
             launcher.launch_bo3()
@@ -806,6 +966,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._bo3_dir = self._resolve_bo3_dir()
         self._latest_tag = None
         self._refresh_status()
+        self._refresh_launch_options()
         self._check_latest_async()
         self._toast("Preferences applied")
 

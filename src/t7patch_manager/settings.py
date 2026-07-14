@@ -30,6 +30,11 @@ class Settings:
     # Useful if a new maintainer ever forks the project.
     github_repo_override: str | None = None
 
+    # Manual override for the Steam launch-options string. When set, the UI's
+    # "Set automatically" button writes this exact value instead of the default
+    # ``WINEDLLOVERRIDES="dsound=n,b" %command%``. Left empty for 99% of users.
+    launch_options_override: str | None = None
+
     # Network timeouts (seconds)
     http_timeout: int = 30
 

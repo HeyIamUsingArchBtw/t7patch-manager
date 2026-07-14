@@ -107,13 +107,16 @@ echo 'include-system-site-packages = true' \
 1. Open **T7Patch Manager** from your app menu.
 2. Click **Install T7Patch v3.xx** — the app downloads the latest release and
    drops the patch files into your BO3 folder.
-3. Set Steam launch options for BO3 to:
-   ```
-   WINEDLLOVERRIDES="dsound=n,b" %command%
-   ```
-   (right-click BO3 in Steam → *Properties* → *Launch options*)
+3. In the **Steam launch options** row, click **Set automatically**. The app
+   writes the required Proton launch string into Steam's config for you. If
+   Steam is still running, it offers to close Steam cleanly first (Steam
+   overwrites its config file on exit, so this step is mandatory).
 4. Optional: click **Edit…** to set your in-game name and network password.
 5. Hit **Play**. Steam launches BO3 through Proton with the patch active.
+
+If you'd rather do it by hand, the target launch string is
+`WINEDLLOVERRIDES="dsound=n,b" %command%` — right-click BO3 in Steam →
+*Properties* → *Launch options*.
 
 The toggle at the top disables the patch (renames the DLLs to `*.disabled`)
 whenever you want vanilla BO3 for a session, without deleting anything.
@@ -259,13 +262,17 @@ pipx install --system-site-packages .
 1. **T7Patch Manager** aus dem App-Menü öffnen.
 2. Auf **Install T7Patch v3.xx** klicken — die App lädt das neueste Release
    herunter und legt die Patch-Dateien in deinen BO3-Ordner.
-3. Steam-Startoptionen für BO3 setzen auf:
-   ```
-   WINEDLLOVERRIDES="dsound=n,b" %command%
-   ```
-   (Rechtsklick auf BO3 in Steam → *Eigenschaften* → *Startoptionen*)
+3. In der Zeile **Steam launch options** auf **Set automatically** klicken.
+   Die App trägt die benötigte Proton-Startzeile für dich in Steams Config ein.
+   Läuft Steam gerade, bietet sie an, Steam vorher sauber zu beenden (Steam
+   überschreibt seine Config-Datei beim Beenden aus dem RAM — daher ist das
+   Schließen zwingend).
 4. Optional: **Edit…** → Spielername und Passwort setzen.
 5. Auf **Play** klicken. Steam startet BO3 mit aktivem Patch.
+
+Wer es lieber selbst macht: der Zielstring ist
+`WINEDLLOVERRIDES="dsound=n,b" %command%` — Rechtsklick auf BO3 in Steam →
+*Eigenschaften* → *Startoptionen*.
 
 Der Schalter oben deaktiviert den Patch (benennt die DLLs zu `*.disabled` um)
 wenn du mal Vanilla-BO3 haben willst — ohne etwas zu löschen.
