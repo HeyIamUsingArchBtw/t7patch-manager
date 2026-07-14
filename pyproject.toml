@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "t7patch-manager"
-version = "0.1.1"
+version = "0.2.0"
 description = "Install, launch, toggle and configure T7Patch v3 for Call of Duty: Black Ops III on Linux"
 readme = "README.md"
 license = { text = "MIT" }

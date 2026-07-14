@@ -87,6 +87,41 @@ The `--system-site-packages` flag lets pipx see your distro's PyGObject.
 The toggle at the top disables the patch (renames the DLLs to `*.disabled`)
 whenever you want vanilla BO3 for a session, without deleting anything.
 
+## Troubleshooting
+
+If the installer or the app misbehaves, start here.
+
+### Run diagnostics
+
+```bash
+./install.sh --diagnose
+```
+
+This checks Python, GTK 4 / libadwaita bindings, `pipx`, your Steam paths
+and BO3 install, without changing anything on your system.
+
+### Common issues
+
+- **`t7patch-manager` command not found after install.** Restart your shell
+  (or open a new terminal). The installer adds `~/.local/bin` to your PATH,
+  but the change only applies to new shells.
+- **App won't start / GTK4 or libadwaita import error.** Make sure your
+  distro's `python3-gi`, `gtk4`, and `libadwaita` packages are installed.
+  Debian/Ubuntu users also need `gir1.2-adw-1`. Then re-run `./install.sh`.
+- **`pipx` isn't available on your distro.** Re-run with `./install.sh --use-pip`
+  to install into a standalone venv at `~/.local/share/t7patch-manager/venv`
+  instead.
+- **The app can't find your BO3 install.** Open **Preferences…** from the menu
+  and set the BO3 path manually (the folder that contains `BlackOps3.exe`).
+- **T7Patch download fails / GitHub is blocked.** Open **Preferences…** and
+  either point the app at a mirror URL, or download
+  `Linux.Steamdeck.and.Manual.Windows.Install.zip` yourself from
+  [Scroptss/T7Patch releases](https://github.com/Scroptss/T7Patch/releases)
+  and set that local zip as the source override.
+- **Something else went wrong.** In the app, open the menu → **Debug log…**,
+  copy the log, and open an issue on
+  [GitHub](https://github.com/HeyIamUsingArchBtw/t7patch-manager/issues).
+
 ## FAQ
 
 **Do I still need `dsound.dll.disabled` chattr tricks / hosts blocks / depot
@@ -188,3 +223,39 @@ pipx install --system-site-packages .
 
 Der Schalter oben deaktiviert den Patch (benennt die DLLs zu `*.disabled` um)
 wenn du mal Vanilla-BO3 haben willst — ohne etwas zu löschen.
+
+### Fehlersuche
+
+Wenn beim Installieren oder Starten etwas schief geht, hier ansetzen.
+
+**System-Check ausführen**
+
+```bash
+./install.sh --diagnose
+```
+
+Prüft Python, GTK 4 / libadwaita, `pipx`, deine Steam-Pfade und die
+BO3-Installation — ohne irgendetwas am System zu ändern.
+
+**Häufige Probleme**
+
+- **`t7patch-manager` ist nach der Installation nicht auffindbar.** Neue
+  Shell öffnen (oder Terminal neu starten). Der Installer trägt
+  `~/.local/bin` in den PATH ein — das gilt nur für neu geöffnete Shells.
+- **App startet nicht / GTK4 oder libadwaita Import-Fehler.** Stell sicher,
+  dass die Pakete `python3-gi`, `gtk4` und `libadwaita` deiner Distro
+  installiert sind. Auf Debian/Ubuntu zusätzlich `gir1.2-adw-1`. Danach
+  `./install.sh` erneut ausführen.
+- **`pipx` gibt's auf deiner Distro nicht.** `./install.sh --use-pip`
+  ausführen — installiert dann in ein eigenständiges venv unter
+  `~/.local/share/t7patch-manager/venv`.
+- **App findet BO3 nicht.** Im Menü **Preferences…** öffnen und den
+  BO3-Pfad manuell setzen (der Ordner, in dem `BlackOps3.exe` liegt).
+- **T7Patch-Download schlägt fehl / GitHub blockiert.** In **Preferences…**
+  eine Mirror-URL setzen oder
+  `Linux.Steamdeck.and.Manual.Windows.Install.zip` selbst von den
+  [Scroptss/T7Patch Releases](https://github.com/Scroptss/T7Patch/releases)
+  herunterladen und die lokale Zip-Datei als Quelle wählen.
+- **Irgendwas anderes ist kaputt.** In der App Menü → **Debug log…** öffnen,
+  Log kopieren und ein Issue bei
+  [GitHub](https://github.com/HeyIamUsingArchBtw/t7patch-manager/issues) aufmachen.
