@@ -45,16 +45,33 @@ class InstallerError(RuntimeError):
 
 
 # ── HTTP helpers ────────────────────────────────────────────────────
-def _urlopen(url: str, timeout: int = 30, accept: str = "application/octet-stream"):
+# GitHub's REST API rejects requests whose Accept header doesn't ask for
+# JSON with a 415 Unsupported Media Type. Everything else (asset downloads,
+# mirror URLs) is happy with octet-stream, so we pick per-request.
+_ACCEPT_JSON = "application/vnd.github+json, application/json;q=0.9, */*;q=0.1"
+_ACCEPT_BINARY = "application/octet-stream, */*;q=0.1"
+
+
+def _accept_for(url: str) -> str:
+    return _ACCEPT_JSON if "api.github.com" in url else _ACCEPT_BINARY
+
+
+def _urlopen(url: str, timeout: int = 30, accept: str | None = None):
     """Wrap urlopen with a User-Agent and consistent timeout."""
     req = urllib.request.Request(
         url,
-        headers={"Accept": accept, "User-Agent": "t7patch-manager"},
+        headers={
+            "Accept": accept or _accept_for(url),
+            "User-Agent": "t7patch-manager",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
     )
     return urllib.request.urlopen(req, timeout=timeout)
 
 
-def _retryable(url: str, timeout: int, on_attempt: Callable[[int, str], None] | None = None):
+def _retryable(url: str, timeout: int,
+               on_attempt: Callable[[int, str], None] | None = None,
+               accept: str | None = None):
     """Yield ``urlopen`` responses with retry on transient errors.
 
     Raises InstallerError with a user-friendly message on final failure.
@@ -62,7 +79,7 @@ def _retryable(url: str, timeout: int, on_attempt: Callable[[int, str], None] | 
     last_err: Exception | None = None
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            return _urlopen(url, timeout=timeout)
+            return _urlopen(url, timeout=timeout, accept=accept)
         except urllib.error.HTTPError as e:
             # 4xx errors are not retryable (except 429)
             if e.code == 429:

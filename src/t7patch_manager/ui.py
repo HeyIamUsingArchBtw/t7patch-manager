@@ -148,7 +148,7 @@ class ConfigDialog(Adw.Dialog):
 
 # ── preferences dialog ──────────────────────────────────────────────
 class PreferencesDialog(Adw.PreferencesDialog):
-    """User overrides — BO3 path, T7Patch source, GitHub repo."""
+    """User overrides — BO3 path, T7Patch source, network timeout."""
 
     def __init__(self, parent: Gtk.Window, settings: Settings,
                  on_applied: Callable[[], None]):
@@ -201,16 +201,12 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self._src_row.add_suffix(clear2)
         g2.add(self._src_row)
 
-        # ── GitHub repo override ──
+        # ── Advanced (network) ──
         g3 = Adw.PreferencesGroup(
             title="Advanced",
-            description="You probably don't need to touch these.",
+            description="You probably don't need to touch this.",
         )
         page.add(g3)
-
-        self._repo_row = Adw.EntryRow(title="GitHub repo (owner/name)")
-        self._repo_row.set_text(settings.github_repo_override or "")
-        g3.add(self._repo_row)
 
         self._timeout_row = Adw.SpinRow.new_with_range(5, 300, 5)
         self._timeout_row.set_title("Network timeout (seconds)")
@@ -274,7 +270,6 @@ class PreferencesDialog(Adw.PreferencesDialog):
     def _apply(self, _btn):
         self._s.bo3_dir_override = self._bo3_row.get_text().strip() or None
         self._s.patch_source_override = self._src_row.get_text().strip() or None
-        self._s.github_repo_override = self._repo_row.get_text().strip() or None
         self._s.http_timeout = int(self._timeout_row.get_value())
         try:
             self._s.save()
@@ -289,7 +284,6 @@ class PreferencesDialog(Adw.PreferencesDialog):
     def _reset(self, _btn):
         self._bo3_row.set_text("")
         self._src_row.set_text("")
-        self._repo_row.set_text("")
         self._timeout_row.set_value(30)
 
 
