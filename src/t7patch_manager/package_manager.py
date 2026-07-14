@@ -48,16 +48,47 @@ log = logging.getLogger(__name__)
 # per-family package names.
 _PACKAGE_NAMES: dict[str, dict[str, str]] = {
     "gamemoderun": {
-        "arch": "gamemode",
+        "arch":   "gamemode",
         "debian": "gamemode",
         "fedora": "gamemode",
-        "suse": "gamemode",
+        "suse":   "gamemode",
+        "alpine": "gamemode",
+        "void":   "gamemode",
+        "gentoo": "games-util/gamemode",
+        "solus":  "gamemode",
     },
     "mangohud": {
-        "arch": "mangohud",
+        "arch":   "mangohud",
         "debian": "mangohud",
         "fedora": "mangohud",
-        "suse": "mangohud",
+        "suse":   "mangohud",
+        "alpine": "mangohud",
+        "void":   "MangoHud",
+        "gentoo": "games-util/mangohud",
+        "solus":  "mangohud",
+    },
+}
+
+# Distro families where the app cannot safely automate installs, but we
+# can still give the user a clean copy-pasteable command. Mapped to a
+# short human-readable name for the fallback dialog.
+_MANUAL_ONLY_FAMILIES: dict[str, str] = {
+    "nixos": "NixOS",
+    "guix": "GNU Guix",
+    "ostree": "immutable Fedora (Silverblue / Kinoite / Bazzite)",
+}
+
+# For manual-only distros, show a concrete recipe the user can copy.
+_MANUAL_INSTALL_HINTS: dict[str, dict[str, str]] = {
+    "gamemoderun": {
+        "nixos": "Add to configuration.nix and rebuild:\n\n    programs.gamemode.enable = true;\n\nthen run: sudo nixos-rebuild switch",
+        "guix":  "guix install gamemode",
+        "ostree": "rpm-ostree install gamemode\nthen reboot: systemctl reboot",
+    },
+    "mangohud": {
+        "nixos": "Add to configuration.nix (system) or home.nix (user):\n\n    environment.systemPackages = [ pkgs.mangohud ];\n\nthen run: sudo nixos-rebuild switch",
+        "guix":  "guix install mangohud",
+        "ostree": "Preferred: flatpak install org.freedesktop.Platform.VulkanLayer.MangoHud\n\nOr layered on host: rpm-ostree install mangohud && systemctl reboot",
     },
 }
 
@@ -107,10 +138,29 @@ def _read_os_release() -> dict[str, str]:
     return {}
 
 
+def _is_immutable_ostree() -> bool:
+    """Return True on Silverblue / Kinoite / Bazzite / other rpm-ostree systems.
+
+    On these systems ``dnf install`` still exists but does nothing useful —
+    layered packages must go through ``rpm-ostree install`` followed by a
+    reboot. We refuse to automate that, but do give the user a clean hint.
+    """
+    # /run/ostree-booted is the authoritative marker created by ostree at boot.
+    if os.path.exists("/run/ostree-booted"):
+        return True
+    # rpm-ostree binary alone isn't proof (Fedora ships it in Workstation too),
+    # but combined with ID=silverblue|kinoite|bazzite it is.
+    ident = _read_os_release().get("VARIANT_ID", "").lower()
+    return ident in {"silverblue", "kinoite", "sericea", "onyx"}
+
+
 def detect_family() -> tuple[str, str] | tuple[None, None]:
     """Return ``(family, display_name)`` or ``(None, None)`` if unknown.
 
-    Family is one of: ``arch``, ``debian``, ``fedora``, ``suse``.
+    Family is one of: ``arch``, ``debian``, ``fedora``, ``suse``,
+    ``alpine``, ``void``, ``gentoo``, ``solus`` (auto-installable), or
+    ``nixos``, ``guix``, ``ostree`` (manual-only — detected but not
+    auto-installed by us).
     """
     info = _read_os_release()
     ident = info.get("ID", "").lower()
@@ -121,14 +171,31 @@ def detect_family() -> tuple[str, str] | tuple[None, None]:
     def _match(*names: str) -> bool:
         return ident in names or any(n in like for n in names)
 
-    if _match("arch", "cachyos", "manjaro", "endeavouros", "artix"):
+    # Immutable rpm-ostree systems must be caught BEFORE fedora — the
+    # ID_LIKE is "fedora" but the install path is completely different.
+    if _is_immutable_ostree() or _match("silverblue", "kinoite", "bazzite", "bluefin", "aurora"):
+        return "ostree", pretty
+
+    if _match("arch", "cachyos", "manjaro", "endeavouros", "artix", "garuda"):
         return "arch", pretty
-    if _match("debian", "ubuntu", "linuxmint", "pop", "elementary", "zorin"):
+    if _match("debian", "ubuntu", "linuxmint", "pop", "elementary", "zorin", "kali", "raspbian"):
         return "debian", pretty
-    if _match("fedora", "rhel", "centos", "nobara", "bazzite"):
+    if _match("fedora", "rhel", "centos", "nobara", "rocky", "almalinux"):
         return "fedora", pretty
     if _match("opensuse", "opensuse-tumbleweed", "opensuse-leap", "suse", "sles"):
         return "suse", pretty
+    if _match("alpine", "postmarketos"):
+        return "alpine", pretty
+    if _match("void"):
+        return "void", pretty
+    if _match("gentoo", "funtoo"):
+        return "gentoo", pretty
+    if _match("solus"):
+        return "solus", pretty
+    if _match("nixos"):
+        return "nixos", pretty
+    if _match("guix", "guixsystem"):
+        return "guix", pretty
 
     log.warning("Unknown distro: ID=%r ID_LIKE=%r", ident, like)
     return None, None
@@ -174,6 +241,34 @@ def _build_command(family: str, package: str) -> tuple[list[str], list[str] | No
             ["zypper", "--non-interactive", "refresh"],
         )
 
+    if family == "alpine":
+        # apk-tools on Alpine and postmarketOS.
+        return (
+            ["apk", "add", "--no-interactive", package],
+            ["apk", "update"],
+        )
+
+    if family == "void":
+        # xbps-install. -S = sync repos, -y = assume yes.
+        return (
+            ["xbps-install", "-Sy", package],
+            None,
+        )
+
+    if family == "gentoo":
+        # emerge builds from source — can be slow, but that's normal on
+        # Gentoo and users expect it. --quiet-build reduces log spam.
+        return (
+            ["emerge", "--noreplace", "--quiet-build=y", package],
+            ["emerge", "--sync", "--quiet"],
+        )
+
+    if family == "solus":
+        return (
+            ["eopkg", "install", "--yes-all", package],
+            ["eopkg", "update-repo"],
+        )
+
     raise ValueError(f"Unknown distro family: {family!r}")
 
 
@@ -200,6 +295,17 @@ def plan_install(wrapper: str) -> InstallPlan:
         raise RuntimeError(
             "Could not detect your distribution's package manager. "
             "Please install the package manually and try again."
+        )
+
+    # Manual-only families — we don't automate NixOS / Guix / rpm-ostree
+    # because the correct install path involves editing config and
+    # rebooting, which the app can't safely do on the user's behalf.
+    if family in _MANUAL_ONLY_FAMILIES:
+        hint = _MANUAL_INSTALL_HINTS.get(wrapper, {}).get(family, "")
+        raise RuntimeError(
+            f"Automatic install isn't supported on {_MANUAL_ONLY_FAMILIES[family]} "
+            f"because the correct install path involves editing system config "
+            f"and/or rebooting. Please run one of:\n\n{hint}"
         )
 
     package = _PACKAGE_NAMES[wrapper].get(family)

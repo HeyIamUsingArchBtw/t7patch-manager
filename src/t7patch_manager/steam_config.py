@@ -29,36 +29,9 @@ from typing import Iterable
 
 from . import steam_vdf
 from .logger import configure as _configure_logging
+from .steam_roots import existing_roots as _existing_steam_roots, steam_flavour
 
 log = _configure_logging()
-
-
-# ── Steam roots ─────────────────────────────────────────────────────
-_STEAM_ROOTS = (
-    "~/.steam/steam",
-    "~/.steam/root",
-    "~/.local/share/Steam",
-    "~/.var/app/com.valvesoftware.Steam/.local/share/Steam",
-    "~/.var/app/com.valvesoftware.Steam/data/Steam",
-    "~/snap/steam/common/.local/share/Steam",
-    "~/snap/steam/common/.steam/steam",
-)
-
-
-def _existing_steam_roots() -> list[Path]:
-    seen: set[Path] = set()
-    out: list[Path] = []
-    for raw in _STEAM_ROOTS:
-        p = Path(os.path.expanduser(raw))
-        try:
-            resolved = p.resolve()
-        except OSError:
-            continue
-        if resolved in seen or not resolved.is_dir():
-            continue
-        seen.add(resolved)
-        out.append(resolved)
-    return out
 
 
 @dataclass(frozen=True)
@@ -84,6 +57,8 @@ def find_local_configs() -> list[LocalConfig]:
     """
     hits: list[LocalConfig] = []
     for root in _existing_steam_roots():
+        # steam_roots.existing_roots is symlink-aware and dedupes, so we
+        # don't re-check that here.
         userdata = root / "userdata"
         if not userdata.is_dir():
             continue
@@ -98,38 +73,60 @@ def find_local_configs() -> list[LocalConfig]:
 
 
 # ── Steam running detection ─────────────────────────────────────────
+# Process/binary names any Steam client — native, Flatpak, Snap or
+# proprietary repackage — might present with. The Flatpak client shows up
+# as ``steam`` inside its own PID namespace but as ``bwrap`` / ``steam``
+# from the host's /proc view; the Snap client sometimes runs its main
+# process as ``steam.desktop``. Covering all three keeps the running-check
+# reliable across setups.
+_STEAM_PROC_NAMES: tuple[str, ...] = (
+    "steam",
+    "steamwebhelper",
+    "steam.desktop",
+)
+
+
 def is_steam_running() -> bool:
     """Best-effort check whether the Steam client is currently running.
 
     We combine three signals so we don't rely on a single fragile one:
 
-    * ``pgrep -x steam`` (works on native + most repackaged clients)
+    * ``pgrep -x <name>`` for each known process name (native, Flatpak, Snap)
     * ``pidof steam``    (fallback for tiny distros without pgrep)
-    * scanning ``/proc/*/comm`` for ``steam``  (no external deps at all)
+    * scanning ``/proc/*/comm`` for any known Steam process name
+      (no external deps at all — works even on minimal containers)
     """
-    for cmd in (("pgrep", "-x", "steam"),
-                ("pgrep", "-x", "steamwebhelper"),
-                ("pidof", "steam")):
-        if shutil.which(cmd[0]) is None:
-            continue
-        try:
-            r = subprocess.run(cmd, capture_output=True, timeout=3)
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        if r.returncode == 0 and r.stdout.strip():
-            return True
+    pgrep = shutil.which("pgrep")
+    if pgrep is not None:
+        for name in _STEAM_PROC_NAMES:
+            try:
+                r = subprocess.run([pgrep, "-x", name], capture_output=True, timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if r.returncode == 0 and r.stdout.strip():
+                return True
 
-    # Pure /proc fallback — no external binaries required.
+    if shutil.which("pidof") is not None:
+        try:
+            r = subprocess.run(["pidof", "steam"], capture_output=True, timeout=3)
+            if r.returncode == 0 and r.stdout.strip():
+                return True
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    # Pure /proc fallback — no external binaries required. /proc/*/comm
+    # is truncated to 15 chars by the kernel; all our target names fit.
     try:
         for entry in Path("/proc").iterdir():
             if not entry.name.isdigit():
                 continue
             comm = entry / "comm"
             try:
-                if comm.read_text(errors="ignore").strip() == "steam":
-                    return True
+                name = comm.read_text(errors="ignore").strip()
             except OSError:
                 continue
+            if name in _STEAM_PROC_NAMES:
+                return True
     except OSError:
         pass
     return False
@@ -148,33 +145,41 @@ def wait_for_steam_to_exit(timeout: float = 30.0, poll: float = 0.5) -> bool:
     return not is_steam_running()
 
 
+def _shutdown_commands() -> list[list[str]]:
+    """Return every reasonable ``steam -shutdown`` invocation for this host.
+
+    Ordered so the native ``steam`` binary is tried first when it exists
+    (fastest, most reliable), then Flatpak, then Snap. Every entry is a
+    fully-resolved argv — callers just try them in order.
+    """
+    cmds: list[list[str]] = []
+    steam_bin = shutil.which("steam")
+    if steam_bin is not None:
+        cmds.append([steam_bin, "-shutdown"])
+    flatpak = shutil.which("flatpak")
+    if flatpak is not None:
+        cmds.append([flatpak, "run", "com.valvesoftware.Steam", "-shutdown"])
+    snap = shutil.which("snap")
+    if snap is not None:
+        cmds.append([snap, "run", "steam", "-shutdown"])
+    return cmds
+
+
 def request_steam_shutdown() -> bool:
     """Ask Steam to exit cleanly.
 
-    Uses ``steam -shutdown`` if the ``steam`` CLI is on ``PATH`` — that's the
-    same method Steam's own installer uses. Returns ``True`` if the command
-    ran (not whether Steam actually stopped — poll with
-    :func:`wait_for_steam_to_exit`).
+    Tries every Steam entry point present on the host (native ``steam``
+    CLI, Flatpak, Snap) — the first one whose command exits reports the
+    request as sent. Returns ``True`` if any variant ran (not whether
+    Steam actually stopped — poll with :func:`wait_for_steam_to_exit`).
     """
-    steam_bin = shutil.which("steam")
-    if steam_bin is None:
-        # Flatpak fallback
-        flatpak = shutil.which("flatpak")
-        if flatpak is not None:
-            try:
-                subprocess.run(
-                    [flatpak, "run", "com.valvesoftware.Steam", "-shutdown"],
-                    capture_output=True, timeout=5,
-                )
-                return True
-            except (OSError, subprocess.TimeoutExpired):
-                return False
-        return False
-    try:
-        subprocess.run([steam_bin, "-shutdown"], capture_output=True, timeout=5)
-        return True
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+    for argv in _shutdown_commands():
+        try:
+            subprocess.run(argv, capture_output=True, timeout=5)
+            return True
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return False
 
 
 # ── Launch-option get/set ───────────────────────────────────────────
